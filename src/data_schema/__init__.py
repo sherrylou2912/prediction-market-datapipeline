@@ -1,0 +1,1 @@
+"""Versioned pipeline data contracts."""

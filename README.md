@@ -4,28 +4,52 @@ This repository contains a legacy prediction-market analysis workflow and the fo
 
 ## Current scope
 
-The new pipeline currently provides configuration loading, startup checks, six data layers with scoped writers, Bronze/Silver/Gold row contracts, a venue adapter interface, and a network-free mock adapter. It does not yet download venue data, create PostgreSQL tables, or commit files and checkpoints together. Those capabilities are planned for later PRs.
+The PR 1 pipeline foundation provides configuration loading, startup checks, six data layers with scoped writers, Bronze/Silver/Gold row contracts, a venue adapter interface, and a network-free mock adapter. It does not download venue data, create PostgreSQL tables, or commit files and checkpoints together. Future work begins when the project owner authorizes the next PR.
 
-## Python environment and package status
+## Source layout
 
-Python 3.9 or newer is required. Dependencies are declared in `pyproject.toml`, resolved in `uv.lock`, and installed with `uv`. No dependencies were added for the pipeline foundation.
+`src/` holds the pipeline code. Each folder has one responsibility:
+
+| Path | Responsibility |
+| --- | --- |
+| `src/config/` | Load configuration and check its values and the data disk. |
+| `src/config/defaults/` | Editable, version-controlled non-secret defaults. |
+| `src/data_schema/` | Versioned Bronze, Silver, and Gold row contracts. |
+| `src/data_io/` | Create data directories and restrict each writer to its assigned layer. |
+| `src/adapters/` | Venue interface and a deterministic mock implementation. |
+| `src/cli.py`, `src/__main__.py` | The `python -m src check` startup command. |
+| `src/common/`, `src/indexers/`, `src/analysis/` | Existing legacy code; its migration is outside PR 1. |
+
+There is no real data loader in PR 1. `src/data_io/` contains the directory and writer foundation for future loading work.
+
+## Python environment and required libraries
+
+Use Python 3.9 or newer and install `uv`. Run these commands from the repository root:
 
 ```bash
-uv sync --group dev
+uv sync --locked --group dev
+uv run python -m src check
+uv run ruff check .
+uv run ruff format --check .
+uv run pytest tests/ -v
 ```
 
-`src` is imported from the repository root by the CLI and test configuration. The project does not currently declare a Python build backend or publish a wheel; dependency control is in place, distributable package packaging is not.
+Run the startup command after setting `DATA_ROOT` as described below. `uv sync --locked --group dev` creates or updates the local `.venv` from the committed lockfile and includes the test and lint tools. The `--locked` flag prevents an accidental lockfile update during installation. `.venv` is local and ignored by Git; do not edit installed packages inside it.
+
+**Where are the required library names?** Root [`pyproject.toml`](pyproject.toml) lists runtime libraries, including `pyarrow` and `python-dotenv`, in `[project].dependencies`. The same file lists `pytest` and `ruff` in `[dependency-groups].dev`. Root [`uv.lock`](uv.lock) records the resolved package versions and transitive dependencies. To change a requirement, edit `pyproject.toml`, regenerate `uv.lock` with `uv lock`, and commit both files together. PR 1 adds no libraries.
+
+Dependency versions are controlled, but wheel distribution is not configured: `pyproject.toml` has no build backend. Run commands from the repository root so Python can import `src` directly.
 
 ## Configure the pipeline
 
 1. Copy `.env.example` to `.env` and set `DATA_ROOT` to an absolute path on a volume intended for pipeline data. The local `.env` is ignored by Git. The CLI reads it automatically; an exported process environment variable overrides the same key in `.env`.
-2. Edit `config/storage.json` for the default minimum free space and `config/runtime.json` for the default log level. Both files are version controlled and contain no secrets.
+2. Edit `src/config/defaults/storage.json` for the default minimum free space and `src/config/defaults/runtime.json` for the default log level. Both files are version controlled and contain no secrets.
 3. Run the startup check. It validates the path, available space, write access, and the six top-level directories.
 
 ```bash
 cp .env.example .env
 # Edit .env and set DATA_ROOT before running this command.
-uv run python -m src.pipeline check
+uv run python -m src check
 ```
 
 The default capacity threshold is 200 GiB. Set `DATA_MIN_FREE_GIB=0` only in an isolated test environment. The project plan warns that the current local disk may be below the production threshold.
@@ -35,15 +59,15 @@ The default capacity threshold is 200 GiB. Set `DATA_MIN_FREE_GIB=0` only in an 
 | Setting | Location and default | Purpose |
 | --- | --- | --- |
 | `DATA_ROOT` | Required in `.env` or process environment | Absolute data directory; never hardcoded in pipeline code. |
-| `PIPELINE_CONFIG_DIR` | Optional environment key; defaults to repository `config/` | Alternate absolute directory containing `storage.json` and `runtime.json`. |
-| `DATA_MIN_FREE_GIB` | Environment override of `config/storage.json`, default 200 | Minimum free disk space before startup. |
-| `PIPELINE_LOG_LEVEL` | Environment override of `config/runtime.json`, default `INFO` | Validated logging level for future jobs. |
+| `PIPELINE_CONFIG_DIR` | Optional environment key; defaults to `src/config/defaults/` | Alternate absolute directory containing `storage.json` and `runtime.json`. |
+| `DATA_MIN_FREE_GIB` | Environment override of `src/config/defaults/storage.json`, default 200 | Minimum free disk space before startup. |
+| `PIPELINE_LOG_LEVEL` | Environment override of `src/config/defaults/runtime.json`, default `INFO` | Validated logging level for future jobs. |
 | `POLYGON_RPC`, `POLYMARKET_START_BLOCK` | `.env.example` | Existing legacy indexer settings. |
 | `KALSHI_API_KEY_ID`, `KALSHI_PRIVATE_KEY_PEM` | Blank in `.env.example` | Reserved for a later Kalshi adapter; unused by this PR. |
 | `POLYMARKET_API_KEY`, `POLYMARKET_API_SECRET`, `POLYMARKET_API_PASSPHRASE` | Blank in `.env.example` | Reserved for later authenticated Polymarket operations; unused by this PR. |
-| `DATABASE_URL` | Blank in `.env.example` | Reserved for the PostgreSQL ledger in PR 2; unused by this PR. |
+| `DATABASE_URL` | Blank in `.env.example` | Reserved for a future PostgreSQL ledger; unused by PR 1. |
 
-Precedence is **process environment > local `.env` > version-controlled JSON default**. Empty override values fall back to JSON defaults where a default exists. `DATA_ROOT` has no fallback. Secrets are never copied into `PipelineConfig` or printed by the startup check. More details are in [config/README.md](config/README.md).
+Precedence is **process environment > local `.env` > version-controlled JSON default**. Empty override values fall back to JSON defaults where a default exists. `DATA_ROOT` has no fallback. Secrets are never copied into `PipelineConfig` or printed by the startup check. More details are in [src/config/README.md](src/config/README.md).
 
 ### Startup errors
 
@@ -68,11 +92,11 @@ The startup check creates `imports/`, `bronze/`, `silver/`, `gold/`, `quarantine
 | `VALIDATOR` | `quarantine/` |
 | `REGISTRY` | `manifests/` |
 
-For example, a `COLLECTOR` writer accepts `bronze/source/file.jsonl` and rejects `silver/file.parquet`, absolute paths, parent traversal, symlink escapes, and replacement of existing files. It publishes a complete file after writing it to a temporary sibling. PR 2 will add manifest registration, durable directory commits, and checkpoint coordination; do not treat a PR 1 writer call as a complete pipeline transaction.
+For example, a `COLLECTOR` writer accepts `bronze/source/file.jsonl` and rejects `silver/file.parquet`, absolute paths, parent traversal, symlink escapes, and replacement of existing files. It publishes a complete file after writing it to a temporary sibling. A writer call in PR 1 does not register a manifest or advance a checkpoint.
 
 ## Data contracts and adapter interface
 
-[Data Contracts v2](docs/SCHEMAS.md) defines the Bronze raw envelope, eight Silver datasets, and four Gold products. The JSON registry in `src/pipeline/schema_registry.json` is checked against that document in tests. `validate_record` enforces row shape, types, UTC timestamps, numeric bounds, JSON shape, and selected point-in-time rules. File-wide uniqueness, coverage, and source-specific quality checks belong to the later validation gate.
+[Data Contracts v2](docs/SCHEMAS.md) defines the Bronze raw envelope, eight Silver datasets, and four Gold products. The JSON registry in `src/data_schema/schema_registry.json` is checked against that document in tests. `validate_record` enforces row shape, types, UTC timestamps, numeric bounds, JSON shape, and selected point-in-time rules. File-wide uniqueness, coverage, and source-specific quality checks belong to the later validation gate.
 
 `VenueAdapter` declares eight operations and eight metadata areas. `MockVenueAdapter` uses only in-memory data and demonstrates market discovery and normalization, trade normalization, and book-event normalization without real API calls. Future venue adapters must implement that interface.
 
@@ -101,7 +125,7 @@ make package
 - [Architecture and execution plan](PROJECT.md)
 - [Data contracts](docs/SCHEMAS.md)
 - [Architecture decision record](docs/ADR-001-v1-architecture.md)
-- [Configuration guide](config/README.md)
+- [Configuration guide](src/config/README.md)
 - [Writing analyses in the legacy workflow](docs/ANALYSIS.md)
 
 ## Research & Citations

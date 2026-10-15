@@ -6,8 +6,8 @@ import argparse
 import sys
 from collections.abc import Mapping, Sequence
 
-from src.pipeline.config import ConfigError, PipelineConfig
-from src.pipeline.layout import DataLayout
+from src.config.settings import ConfigError, PipelineConfig
+from src.data_io.layout import DataLayout
 
 
 def main(argv: Sequence[str] | None = None, environ: Mapping[str, str] | None = None) -> int:

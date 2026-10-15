@@ -15,10 +15,12 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
-from src.pipeline.__main__ import main
-from src.pipeline.adapter import VenueAdapter
-from src.pipeline.config import ConfigError, PipelineConfig
-from src.pipeline.contracts import (
+from src.adapters.base import VenueAdapter
+from src.adapters.mock import MockVenueAdapter
+from src.cli import main
+from src.config.settings import ConfigError, PipelineConfig
+from src.data_io.layout import DataLayout, WriteBoundaryError, WriterRole
+from src.data_schema.contracts import (
     SCHEMA_REGISTRY,
     SCHEMA_VERSION,
     ContractError,
@@ -26,8 +28,6 @@ from src.pipeline.contracts import (
     get_contract,
     validate_record,
 )
-from src.pipeline.layout import DataLayout, WriteBoundaryError, WriterRole
-from src.pipeline.mock_adapter import MockVenueAdapter
 
 
 def test_config_requires_absolute_data_root_and_reports_unwritable(
@@ -41,7 +41,7 @@ def test_config_requires_absolute_data_root_and_reports_unwritable(
     def deny_write(**kwargs: object) -> None:
         raise PermissionError("test denial")
 
-    monkeypatch.setattr("src.pipeline.config_validation.tempfile.TemporaryFile", deny_write)
+    monkeypatch.setattr("src.config.validation.tempfile.TemporaryFile", deny_write)
     config = PipelineConfig.from_env({"DATA_ROOT": str(tmp_path), "DATA_MIN_FREE_GIB": "0"})
     with pytest.raises(ConfigError, match="DATA_ROOT is not writable.*test denial"):
         config.validate_startup()
@@ -49,10 +49,11 @@ def test_config_requires_absolute_data_root_and_reports_unwritable(
 
 def test_config_checks_disk_space_and_environment_overrides(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     disk = type("Disk", (), {"free": 3 * 1024**3})()
-    monkeypatch.setattr("src.pipeline.config_validation.shutil.disk_usage", lambda path: disk)
+    monkeypatch.setattr("src.config.validation.shutil.disk_usage", lambda path: disk)
     config = PipelineConfig.from_env(
         {"DATA_ROOT": str(tmp_path), "DATA_MIN_FREE_GIB": "4", "PIPELINE_LOG_LEVEL": "debug"}
     )
+    assert config.config_dir == Path(__file__).parents[1] / "src" / "config" / "defaults"
     assert config.log_level == "DEBUG"
     with pytest.raises(ConfigError, match="DATA_MIN_FREE_GIB requires 4 GiB"):
         config.validate_startup()
@@ -183,7 +184,7 @@ def test_writer_cleans_temporary_file_on_publish_failure(tmp_path: Path, monkeyp
     def deny_link(source: str, target: Path) -> None:
         raise OSError("test publication failure")
 
-    monkeypatch.setattr("src.pipeline.layout.os.link", deny_link)
+    monkeypatch.setattr("src.data_io.layout.os.link", deny_link)
     with pytest.raises(OSError, match="test publication failure"):
         layout.writer(WriterRole.COLLECTOR).write_new("bronze/failure.bin", b"payload")
     assert not list((tmp_path / "bronze").iterdir())
@@ -359,7 +360,7 @@ def test_pipeline_cli_reports_configuration_errors_and_prepares_layout(
 def test_module_entry_point_runs_in_a_new_process(tmp_path: Path) -> None:
     environment = {**os.environ, "DATA_ROOT": str(tmp_path), "DATA_MIN_FREE_GIB": "0"}
     result = subprocess.run(
-        [sys.executable, "-m", "src.pipeline", "check"],
+        [sys.executable, "-m", "src", "check"],
         cwd=Path(__file__).parents[1],
         env=environment,
         capture_output=True,

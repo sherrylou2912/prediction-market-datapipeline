@@ -11,7 +11,7 @@ from typing import Any
 
 from dotenv import dotenv_values
 
-from src.pipeline.config_validation import (
+from src.config.validation import (
     ConfigError,
     parse_data_root,
     parse_log_level,
@@ -20,7 +20,7 @@ from src.pipeline.config_validation import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_CONFIG_DIR = PROJECT_ROOT / "config"
+DEFAULT_CONFIG_DIR = Path(__file__).resolve().parent / "defaults"
 DEFAULT_ENV_FILE = PROJECT_ROOT / ".env"
 
 
