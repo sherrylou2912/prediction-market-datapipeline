@@ -23,7 +23,18 @@ Requires Python 3.9+. Install dependencies with [uv](https://github.com/astral-s
 uv sync
 ```
 
-Download and extract the pre-collected dataset (36GiB compressed):
+### v1 pipeline foundation
+
+The v1 rebuild uses a separate entry point. Set `DATA_ROOT` to an absolute location with at least 200 GiB free, then validate and create its six data layers:
+
+```bash
+export DATA_ROOT=/absolute/path/to/prediction-market-data
+uv run python -m src.v1 check
+```
+
+`DATA_MIN_FREE_GIB` defaults to 200 and may be overridden for controlled tests. `PIPELINE_LOG_LEVEL` defaults to `INFO`. Missing, unwritable, or undersized data roots fail at startup. The legacy commands below still use their former layout and are not part of the v1 writer path.
+
+The legacy setup command downloads and extracts the pre-collected dataset (36 GiB compressed). Do not run it as a v1 initialization step:
 
 ```bash
 make setup
@@ -84,7 +95,8 @@ This creates a zstd-compressed tar archive (`data.tar.zst`) and removes the `dat
 
 ## Documentation
 
-- [Data Schemas](docs/SCHEMAS.md) - Parquet file schemas for markets and trades
+- [Data Contracts v2](docs/SCHEMAS.md) - Bronze, Silver, and Gold contracts
+- [Architecture decision](docs/ADR-001-v1-architecture.md) - v1 storage and scheduling choices
 - [Writing Analyses](docs/ANALYSIS.md) - Guide for writing custom analysis scripts
 
 ## Contributing

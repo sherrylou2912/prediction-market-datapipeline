@@ -1,0 +1,268 @@
+{
+  "version": "2.0.0",
+  "datasets": {
+    "bronze.raw": {
+      "primary_key": [
+        "run_id",
+        "record_index"
+      ],
+      "fields": {
+        "run_id": "str",
+        "record_index": "int",
+        "venue": "str",
+        "source": "str",
+        "message_type": "str",
+        "source_event_id": "str?",
+        "event_time": "utc_datetime?",
+        "received_at": "utc_datetime",
+        "ingested_at": "utc_datetime",
+        "sequence": "int?",
+        "api_version": "str",
+        "protocol_version": "str?",
+        "schema_version": "str",
+        "raw_payload": "json"
+      }
+    },
+    "silver.events": {
+      "primary_key": [
+        "venue",
+        "event_id",
+        "observed_at"
+      ],
+      "fields": {
+        "venue": "str",
+        "event_id": "str",
+        "title": "str",
+        "observed_at": "utc_datetime",
+        "bronze_run_id": "str",
+        "bronze_record_index": "int",
+        "schema_version": "str"
+      }
+    },
+    "silver.markets": {
+      "primary_key": [
+        "venue",
+        "market_id",
+        "observed_at"
+      ],
+      "fields": {
+        "venue": "str",
+        "market_id": "str",
+        "event_id": "str?",
+        "title": "str",
+        "status": "str",
+        "open_at": "utc_datetime?",
+        "close_at": "utc_datetime?",
+        "observed_at": "utc_datetime",
+        "bronze_run_id": "str",
+        "bronze_record_index": "int",
+        "schema_version": "str"
+      }
+    },
+    "silver.outcomes": {
+      "primary_key": [
+        "venue",
+        "outcome_id",
+        "observed_at"
+      ],
+      "fields": {
+        "venue": "str",
+        "outcome_id": "str",
+        "market_id": "str",
+        "label": "str",
+        "observed_at": "utc_datetime",
+        "bronze_run_id": "str",
+        "bronze_record_index": "int",
+        "schema_version": "str"
+      }
+    },
+    "silver.market_states": {
+      "primary_key": [
+        "venue",
+        "market_id",
+        "observed_at"
+      ],
+      "fields": {
+        "venue": "str",
+        "market_id": "str",
+        "status": "str",
+        "best_bid": "decimal?",
+        "best_ask": "decimal?",
+        "observed_at": "utc_datetime",
+        "bronze_run_id": "str",
+        "bronze_record_index": "int",
+        "schema_version": "str"
+      }
+    },
+    "silver.trades": {
+      "primary_key": [
+        "venue",
+        "trade_id"
+      ],
+      "fields": {
+        "venue": "str",
+        "trade_id": "str",
+        "market_id": "str",
+        "outcome_id": "str?",
+        "price": "decimal",
+        "quantity": "decimal",
+        "taker_side": "str?",
+        "event_time": "utc_datetime",
+        "observed_at": "utc_datetime",
+        "bronze_run_id": "str",
+        "bronze_record_index": "int",
+        "schema_version": "str"
+      }
+    },
+    "silver.book_snapshots": {
+      "primary_key": [
+        "venue",
+        "snapshot_id"
+      ],
+      "fields": {
+        "venue": "str",
+        "snapshot_id": "str",
+        "market_id": "str",
+        "outcome_id": "str",
+        "source_sequence": "int?",
+        "bids": "json",
+        "asks": "json",
+        "event_time": "utc_datetime",
+        "received_at": "utc_datetime",
+        "recovery": "bool",
+        "bronze_run_id": "str",
+        "bronze_record_index": "int",
+        "schema_version": "str"
+      }
+    },
+    "silver.book_deltas": {
+      "primary_key": [
+        "venue",
+        "delta_id"
+      ],
+      "fields": {
+        "venue": "str",
+        "delta_id": "str",
+        "market_id": "str",
+        "outcome_id": "str",
+        "source_sequence": "int?",
+        "side": "str",
+        "price": "decimal",
+        "quantity": "decimal",
+        "event_time": "utc_datetime",
+        "received_at": "utc_datetime",
+        "bronze_run_id": "str",
+        "bronze_record_index": "int",
+        "schema_version": "str"
+      }
+    },
+    "silver.settlements": {
+      "primary_key": [
+        "venue",
+        "market_id",
+        "outcome_id",
+        "observed_at"
+      ],
+      "fields": {
+        "venue": "str",
+        "market_id": "str",
+        "outcome_id": "str",
+        "payout": "decimal",
+        "settled_at": "utc_datetime",
+        "observed_at": "utc_datetime",
+        "bronze_run_id": "str",
+        "bronze_record_index": "int",
+        "schema_version": "str"
+      }
+    },
+    "gold.market_daily": {
+      "primary_key": [
+        "venue",
+        "market_id",
+        "day",
+        "as_of"
+      ],
+      "fields": {
+        "venue": "str",
+        "market_id": "str",
+        "day": "str",
+        "volume": "decimal",
+        "trade_count": "int",
+        "as_of": "utc_datetime",
+        "source_manifest_ids": "json",
+        "schema_version": "str"
+      }
+    },
+    "gold.market_1s": {
+      "primary_key": [
+        "venue",
+        "market_id",
+        "outcome_id",
+        "second"
+      ],
+      "fields": {
+        "venue": "str",
+        "market_id": "str",
+        "outcome_id": "str",
+        "second": "utc_datetime",
+        "best_bid": "decimal?",
+        "best_ask": "decimal?",
+        "spread": "decimal?",
+        "mid": "decimal?",
+        "microprice": "decimal?",
+        "bid_depth_top_n": "decimal?",
+        "ask_depth_top_n": "decimal?",
+        "imbalance": "decimal?",
+        "last_trade_price": "decimal?",
+        "rolling_volume": "decimal",
+        "update_count": "int",
+        "book_age_ms": "int?",
+        "receive_latency_ms": "int?",
+        "gap": "bool",
+        "recovery": "bool",
+        "as_of": "utc_datetime",
+        "source_manifest_ids": "json",
+        "schema_version": "str"
+      }
+    },
+    "gold.liquidity_features": {
+      "primary_key": [
+        "venue",
+        "market_id",
+        "outcome_id",
+        "observation_time"
+      ],
+      "fields": {
+        "venue": "str",
+        "market_id": "str",
+        "outcome_id": "str",
+        "observation_time": "utc_datetime",
+        "spread": "decimal?",
+        "depth_top_n": "decimal?",
+        "imbalance": "decimal?",
+        "source_manifest_ids": "json",
+        "schema_version": "str"
+      }
+    },
+    "gold.training_datasets": {
+      "primary_key": [
+        "dataset_name",
+        "venue",
+        "market_id",
+        "observation_time"
+      ],
+      "fields": {
+        "dataset_name": "str",
+        "venue": "str",
+        "market_id": "str",
+        "observation_time": "utc_datetime",
+        "features": "json",
+        "max_feature_event_time": "utc_datetime",
+        "label": "decimal?",
+        "label_available_at": "utc_datetime?",
+        "source_manifest_ids": "json",
+        "schema_version": "str"
+      }
+    }
+  }
+}
