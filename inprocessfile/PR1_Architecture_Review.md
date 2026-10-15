@@ -43,9 +43,10 @@
 | `parse_data_root` | 加载 `DATA_ROOT` 时调用。拒绝空值和相对路径，避免把数据误写到当前工作目录。 | `test_config_requires_absolute_data_root_and_reports_unwritable` 分别断言未设置和相对路径报清晰错误；其他配置成功测试间接覆盖合法绝对路径。 |
 | `parse_min_free_gib` | 加载空间门槛时调用。把文本变成非负整数，供未来写入任务使用。 | `test_config_checks_disk_space_and_environment_overrides` 验证文本 `4`、`0` 可以使用、负数被拒。JSON 中的布尔值在 `_read_json_settings` 就被拒，**当前没有单独测试直接传布尔值给本函数**。 |
 | `parse_log_level` | 加载日志级别时调用。把 `debug` 统一成 `DEBUG`，只允许五个预设级别。 | `test_config_checks_disk_space_and_environment_overrides` 检查小写 `debug` 转成 `DEBUG`；`test_config_files_reject_malformed_or_unexpected_values` 检查 `TRACE` 被拒。 |
-| `check_configured_root` | 通用 `check` 命令，以及读写检查开始时调用。只判断目标或最近的现存父路径能否作为目录；目标尚未存在可以通过，已是普通文件则报错。 | `test_pipeline_cli_checks_configuration_without_preparing_layout` 分别检查存在的目录、尚未创建的目录、普通文件；同时把空间查询和试写替换为“调用就失败”，证明通用检查无这两类副作用。`test_read_checks_do_not_probe_write_capacity_or_create_directories` 也直接调用它。 |
+| `_nearest_existing_directory` | 通用检查和写入检查都会调用的内部助手。沿路径向上找到第一个已经存在的目录；如果碰到普通文件，就在查磁盘之前报错。 | `test_configured_root_rejects_file_ancestor_before_write_probe` 通过两个公开入口分别验证同一个非目录父路径被拒，并把磁盘查询替换为“调用就失败”；`test_write_preflight_creates_root_before_layout` 覆盖多级尚未创建的路径。没有单独直接调用私有助手。 |
+| `check_configured_root` | 通用 `check` 命令，以及读写检查开始时调用。借助共享助手判断路径是否适合当目录；目标尚未存在可以通过，已是普通文件则报错。 | `test_pipeline_cli_checks_configuration_without_preparing_layout` 分别检查存在的目录、尚未创建的目录、普通文件；`test_configured_root_rejects_file_ancestor_before_write_probe` 检查更深一层的普通文件父路径；无副作用测试证明不探测空间或写权限。 |
 | `validate_read_data_root` | 将来的只读任务通过 `validate_for_read` 调用。要求目录确实存在，并实际尝试列目录内容，以发现读权限问题。 | `test_read_check_requires_existing_readable_directory` 检查缺目录会失败，并模拟 `PermissionError` 检查错误说明；`test_read_checks_do_not_probe_write_capacity_or_create_directories` 检查成功且不探测写入条件。 |
-| `validate_write_data_root` | 将来的写入任务通过 `validate_for_write` 调用。找到目标磁盘、查空位、按需建根目录、创建临时文件确认可写。 | `test_config_checks_disk_space_and_environment_overrides` 检查磁盘不足和低门槛成功；`test_config_requires_absolute_data_root_and_reports_unwritable` 模拟实际试写失败；`test_write_preflight_creates_root_before_layout` 检查新根目录被创建。 |
+| `validate_write_data_root` | 将来的写入任务通过 `validate_for_write` 调用。通过共享助手找到目标磁盘、查空位、按需建根目录、创建临时文件确认可写。 | `test_config_checks_disk_space_and_environment_overrides` 检查磁盘不足和低门槛成功；`test_config_requires_absolute_data_root_and_reports_unwritable` 模拟实际试写失败；`test_write_preflight_creates_root_before_layout` 检查新根目录被创建；非目录父路径测试确认查磁盘前拒绝。 |
 
 空间不足与读写权限失败是测试中注入的故障，没有真的填满磁盘或修改系统权限。检查目录可读，也不能代替将来对某个具体数据文件的可读性检查。
 
@@ -59,7 +60,7 @@
 | `DataLayout.writer` | 有文件要保存时，任务按岗位申请 writer。`IMPORTER→imports`、`COLLECTOR→bronze`、`NORMALIZER→silver`、`PRODUCT→gold`、`VALIDATOR→quarantine`、`REGISTRY→manifests`。 | `test_each_writer_is_bound_to_its_layer` 对六个角色分别验证本层可写、别层不可写；`test_layout_creates_layers_and_writer_enforces_scope` 检查随意传字符串角色被拒。 |
 | `ScopedWriter.write_new` | writer 真正公布一个新文件时调用。先验证路径，写临时文件并同步内容，再独占发布；同名文件不能覆盖。 | `test_layout_creates_layers_and_writer_enforces_scope` 检查正常写入以及跨层、绝对路径、`..`、同名覆盖被拒；`test_writer_rejects_symlink_escape` 检查不能通过链接写到外部；`test_writer_cleans_temporary_file_on_publish_failure` 模拟发布失败，检查目标与临时文件都没有留下；六角色参数化测试检查岗位边界。 |
 
-这属于程序接口的边界，不是操作系统账号权限。没有模拟攻击者在检查与发布之间并发替换目录，也没有模拟突然断电。文件内容在发布前已同步，但 PR1 没有实现目录元数据、manifest 和 checkpoint 的一致提交。
+这属于程序接口的边界，明确假设同机进程合作、只防意外路径错误；[`write_new` 的代码注释](../src/data_io/layout.py) 也写明它不防恶意进程在检查与发布之间并发替换目录。测试没有模拟恶意并发或突然断电。文件内容在发布前已同步，但 PR1 没有实现目录元数据、manifest 和 checkpoint 的一致提交。
 
 ## 文件：[`src/data_schema/contracts.py`](../src/data_schema/contracts.py)
 
@@ -73,7 +74,7 @@
 | `_parse_json` 内部的 `reject_constant` | JSON 解析器遇到非标准 `NaN` 等常量时自动调用，防止错误值混入。 | 上述 `NaN` 用例经 `_parse_json` 间接触发并得到契约错误；没有单独直接调用这个内部回调。 |
 | `validate_record` | 一行 Bronze、Silver 或 Gold 数据进入下一步前调用。检查缺栏、多栏、类型、UTC 时间、数字精度和范围、JSON 形状；训练数据还防止使用观察时点之后才知道的特征。 | `test_bronze_and_silver_validation_rejects_bad_rows` 检查坏 JSON、时间、额外字段、负数、价格和精度；`test_gold_one_second_requires_aligned_utc_time` 检查秒对齐与价格；`test_training_features_obey_point_in_time_contract` 检查未来特征和空 manifest 列表；mock 链路检查正常市场、成交和盘口记录。 |
 
-`test_schema_document_matches_code_registry` 直接断言文档中的 JSON 与程序注册表完全相等。当前是**逐行**验证；跨文件主键唯一性、时间覆盖和 venue 特有质量规则未在 PR1 实现。文档与代码相等，不代表真实 venue 数据已经适配。
+`test_schema_document_matches_code_registry` 直接断言文档中的 JSON 与程序注册表完全相等。当前价格、概率和非负范围仍靠代码里的字段名集合识别：新添一个需要范围约束的字段，如果忘记同步集合，行校验可能放过越界值。代码注释已明确这个维护风险；未来升级数据契约时应将字段范围声明移进 schema registry，并测试新增字段的拒绝路径。当前是**逐行**验证；跨文件主键唯一性、时间覆盖和 venue 特有质量规则未在 PR1 实现。文档与代码相等，不代表真实 venue 数据已经适配。
 
 ## 文件：[`src/adapters/base.py`](../src/adapters/base.py)
 
@@ -83,16 +84,16 @@
 | --- | --- | --- |
 | `AdapterMetadata.__post_init__` | 创建 venue 的“说明书”时自动调用。要求能力、版本、主键、分页/续跑、限速、时间、精度、校验规则八项均非空，且限速为正。 | `test_mock_adapter_discover_to_normalize_chain` 取得 mock 的有效说明，并分别把规则改为空、限速改为零，断言失败。 |
 | `VenueAdapter.metadata` | 上层任务查询 venue 能做什么、如何限速和续跑时使用；每个实现都必须提供。 | 同一测试确认不能直接实例化抽象 `VenueAdapter`，并读取 mock 的 `metadata`；这是接口完整性检查，没有逐项模拟真实 API。 |
-| `VenueAdapter.discover_markets` | 首次列出某场所市场时必须由具体 adapter 实现。 | 抽象类不能直接实例化的断言覆盖“必须实现接口”；具体输出由同一测试通过 mock 的 `discover_markets` 检查。 |
-| `VenueAdapter.backfill_markets` | 补历史市场资料时必须实现。 | 接口完整性断言，加上 mock 回填页与发现页相等的断言。 |
-| `VenueAdapter.backfill_trades` | 补历史成交时必须实现。 | 接口完整性断言，加上 mock 返回一条成交并送入标准化的断言。 |
-| `VenueAdapter.fetch_settlements` | 获取结算资料时必须实现。 | 接口完整性断言，加上 mock 返回明确空页的断言。 |
-| `VenueAdapter.stream_market_data` | 持续接收选定市场盘口事件时必须实现。 | 接口完整性断言，加上 mock 产出一条事件并检查序号的断言。 |
-| `VenueAdapter.normalize_market` | 把场所市场资料翻译为统一 Silver 市场行时必须实现。 | 接口完整性断言，加上 mock 产出合格市场行与 Arrow 转换的断言。 |
-| `VenueAdapter.normalize_trade` | 把场所成交翻译为统一 Silver 成交行时必须实现。 | 接口完整性断言，加上 mock 价格与 Arrow 转换的断言。 |
-| `VenueAdapter.normalize_book_event` | 把场所盘口事件翻译为统一 Silver 盘口行时必须实现。 | 接口完整性断言，加上 mock 序号与契约校验的断言。 |
+| `VenueAdapter.discover_markets` | 首次列出某场所市场时必须由具体 adapter 实现。 | `test_adapter_missing_one_required_method_cannot_start` 单独移除本方法，确认实例化报错；mock 链路检查实际市场和游标。 |
+| `VenueAdapter.backfill_markets` | 补历史市场资料时必须实现。 | 同一参数化测试单独移除本方法并确认报错；mock 链路检查回填页与发现页相等。 |
+| `VenueAdapter.backfill_trades` | 补历史成交时必须实现。 | 同一参数化测试单独移除本方法并确认报错；mock 链路将返回的成交送入标准化。 |
+| `VenueAdapter.fetch_settlements` | 获取结算资料时必须实现。 | 同一参数化测试单独移除本方法并确认报错；mock 链路检查明确空页。 |
+| `VenueAdapter.stream_market_data` | 持续接收选定市场盘口事件时必须实现。 | 同一参数化测试单独移除本方法并确认报错；mock 链路检查一条事件及序号。 |
+| `VenueAdapter.normalize_market` | 把场所市场资料翻译为统一 Silver 市场行时必须实现。 | 同一参数化测试单独移除本方法并确认报错；mock 链路检查契约与 Arrow 转换。 |
+| `VenueAdapter.normalize_trade` | 把场所成交翻译为统一 Silver 成交行时必须实现。 | 同一参数化测试单独移除本方法并确认报错；mock 链路检查价格与 Arrow 转换。 |
+| `VenueAdapter.normalize_book_event` | 把场所盘口事件翻译为统一 Silver 盘口行时必须实现。 | 同一参数化测试单独移除本方法并确认报错；mock 链路检查序号与契约。 |
 
-八个抽象方法目前**没有分别构造八种“漏实现一个方法”的测试类**；现有测试只证明抽象接口不能直接实例化，以及完整 mock 能实例化并跑通样例。真实分页、断线、限速和 API 版本变化尚未验证。
+现在八个抽象方法各有一个“只漏这个方法”的参数化测试，缺失时 Python 在实例化阶段抛出 `TypeError`。接口文档也明确要求：真实读取或标准化失败必须抛错，不能假装返回成功；空页只能表示来源确实没有记录。未来负责运行记录和 checkpoint 的代码还必须记录异常且不得推进进度。PR1 没有真实 adapter 或该运行层，因此**尚未测试真实异常如何被记录或隔离**。真实分页、断线、限速和 API 版本变化也未验证。
 
 ## 文件：[`src/adapters/mock.py`](../src/adapters/mock.py)
 
@@ -129,7 +130,7 @@
 .venv/bin/pytest tests/ -q
 ```
 
-结果：Ruff 两项均通过；定向测试 **25 passed**；完整测试 **143 passed，5 warnings**。5 条 warning 来自已有第三方库与旧分析测试，没有失败测试。上述是先前代码验收结果；本次只重排报告，没有改代码或测试。用户可按 [`README.md`](../README.md) 中的 `uv` 步骤复核。
+结果：Ruff 两项均通过；定向测试 **34 passed**；完整测试 **152 passed，5 warnings**。5 条 warning 来自已有第三方库与旧分析测试，没有失败测试。用户可按 [`README.md`](../README.md) 中的 `uv` 步骤复核。
 
 现有 writer 只保证本次接口所述的路径与文件发布边界；它尚未把文件、manifest 和 checkpoint 组成一致事务。空间与权限故障由测试模拟，真实磁盘填满、断电、并发换目录、真实 venue API 和真实 backtest 都未在 PR1 验证。
 

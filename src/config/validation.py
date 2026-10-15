@@ -40,15 +40,21 @@ def parse_log_level(value: str) -> str:
     return level
 
 
-def check_configured_root(root: Path) -> Path:
-    """Check the configured path without reading, creating, or writing data."""
-    existing = root
+def _nearest_existing_directory(path: Path) -> Path:
+    """Find the existing directory that contains a configured data path."""
+    existing = path
     while not existing.exists():
         if existing == existing.parent:
-            raise ConfigError(f"DATA_ROOT has no existing parent: {root}")
+            raise ConfigError(f"DATA_ROOT has no existing parent: {path}")
         existing = existing.parent
     if not existing.is_dir():
         raise ConfigError(f"DATA_ROOT is not a directory or has a non-directory parent: {existing}")
+    return existing
+
+
+def check_configured_root(root: Path) -> Path:
+    """Check the configured path without reading, creating, or writing data."""
+    _nearest_existing_directory(root)
     return root.resolve(strict=True) if root.exists() else root
 
 
@@ -67,10 +73,7 @@ def validate_read_data_root(root: Path) -> Path:
 
 def validate_write_data_root(root: Path, min_free_gib: int) -> Path:
     """Check capacity and write access before a job creates or publishes data."""
-    check_configured_root(root)
-    existing = root
-    while not existing.exists():
-        existing = existing.parent
+    existing = _nearest_existing_directory(root)
 
     try:
         free_bytes = shutil.disk_usage(existing).free

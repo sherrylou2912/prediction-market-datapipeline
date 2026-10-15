@@ -110,6 +110,24 @@ def test_write_preflight_creates_root_before_layout(tmp_path: Path) -> None:
     assert (root / "bronze").is_dir()
 
 
+def test_configured_root_rejects_file_ancestor_before_write_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    non_directory = tmp_path / "file"
+    non_directory.write_text("not a directory", encoding="utf-8")
+    root = non_directory / "nested" / "data"
+    config = PipelineConfig.from_env({"DATA_ROOT": str(root), "DATA_MIN_FREE_GIB": "0"})
+
+    def unexpected_disk_probe(path: Path) -> None:
+        pytest.fail("Invalid path must be rejected before checking disk space")
+
+    monkeypatch.setattr("src.config.validation.shutil.disk_usage", unexpected_disk_probe)
+    with pytest.raises(ConfigError, match="non-directory parent"):
+        check_configured_root(root)
+    with pytest.raises(ConfigError, match="non-directory parent"):
+        config.validate_for_write()
+
+
 def test_split_config_files_and_environment_precedence(tmp_path: Path) -> None:
     config_dir = tmp_path / "settings"
     config_dir.mkdir()
@@ -391,6 +409,29 @@ def test_mock_adapter_discover_to_normalize_chain() -> None:
     book = adapter.normalize_book_event(next(adapter.stream_market_data(["mock-1"])))
     assert book["source_sequence"] == 1
     validate_record("silver.book_deltas", book)
+
+
+@pytest.mark.parametrize(
+    "method_name",
+    (
+        "discover_markets",
+        "backfill_markets",
+        "backfill_trades",
+        "fetch_settlements",
+        "stream_market_data",
+        "normalize_market",
+        "normalize_trade",
+        "normalize_book_event",
+    ),
+)
+def test_adapter_missing_one_required_method_cannot_start(method_name: str) -> None:
+    incomplete = type(
+        f"Missing{method_name}",
+        (MockVenueAdapter,),
+        {method_name: getattr(VenueAdapter, method_name)},
+    )
+    with pytest.raises(TypeError, match=method_name):
+        incomplete()
 
 
 def test_pipeline_cli_checks_configuration_without_preparing_layout(

@@ -50,6 +50,8 @@ class ScopedWriter:
     role: WriterRole
 
     def write_new(self, path: str | Path, payload: bytes) -> Path:
+        # These path checks protect cooperative local processes from mistakes.
+        # A hostile actor that swaps directories concurrently is outside this writer's threat model.
         if not isinstance(payload, bytes):
             raise TypeError("payload must be bytes")
         relative = Path(path)

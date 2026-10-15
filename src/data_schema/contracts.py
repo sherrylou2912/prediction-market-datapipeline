@@ -22,6 +22,8 @@ _ARROW_TYPES = {
     "decimal": pa.decimal128(28, 10),
     "json": pa.string(),
 }
+# These PR 1 field-name rules require manual updates when a schema gains constrained fields.
+# Declare ranges and other field-level constraints in the schema registry before relying on schema evolution.
 _PROBABILITIES = {
     "price",
     "payout",

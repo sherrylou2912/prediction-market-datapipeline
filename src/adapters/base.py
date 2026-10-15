@@ -48,6 +48,13 @@ class AdapterMetadata:
 
 
 class VenueAdapter(ABC):
+    """Venue contract: failed reads or normalization must raise, never return false success.
+
+    An empty page is valid only when the source genuinely has no records. Future
+    orchestration must record raised errors and leave checkpoints unchanged;
+    malformed source records must retain their evidence for quarantine.
+    """
+
     @property
     @abstractmethod
     def metadata(self) -> AdapterMetadata:
