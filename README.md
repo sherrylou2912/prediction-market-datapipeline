@@ -1,113 +1,108 @@
-# Prediction Market Analysis
+# Prediction Market Data Pipeline
 
-A framework for analyzing prediction market data, including the largest publicly available dataset of Polymarket and Kalshi market and trade data. Provides tools for data collection, storage, and running analysis scripts that generate figures and statistics.
+This repository contains a legacy prediction-market analysis workflow and the foundation of a new, versioned data pipeline. The new pipeline is designed for reproducible research, traceable source records, and recoverable data collection. `PROJECT.md` is the architecture authority.
 
-## Overview
+## Current scope
 
-This project enables research and analysis of prediction markets by providing:
-- Pre-collected datasets from Polymarket and Kalshi
-- Data collection indexers for gathering new data
-- Analysis framework for generating figures and statistics
+The new pipeline currently provides configuration loading, startup checks, six data layers with scoped writers, Bronze/Silver/Gold row contracts, a venue adapter interface, and a network-free mock adapter. It does not yet download venue data, create PostgreSQL tables, or commit files and checkpoints together. Those capabilities are planned for later PRs.
 
-Currently supported features:
-- Market metadata collection (Kalshi & Polymarket)
-- Trade history collection via API and blockchain
-- Parquet-based storage with automatic progress saving
-- Extensible analysis script framework
+## Python environment and package status
 
-## Installation & Usage
-
-Requires Python 3.9+. Install dependencies with [uv](https://github.com/astral-sh/uv):
+Python 3.9 or newer is required. Dependencies are declared in `pyproject.toml`, resolved in `uv.lock`, and installed with `uv`. No dependencies were added for the pipeline foundation.
 
 ```bash
-uv sync
+uv sync --group dev
 ```
 
-### v1 pipeline foundation
+`src` is imported from the repository root by the CLI and test configuration. The project does not currently declare a Python build backend or publish a wheel; dependency control is in place, distributable package packaging is not.
 
-The v1 rebuild uses a separate entry point. Set `DATA_ROOT` to an absolute location with at least 200 GiB free, then validate and create its six data layers:
+## Configure the pipeline
+
+1. Copy `.env.example` to `.env` and set `DATA_ROOT` to an absolute path on a volume intended for pipeline data. The local `.env` is ignored by Git. The CLI reads it automatically; an exported process environment variable overrides the same key in `.env`.
+2. Edit `config/storage.json` for the default minimum free space and `config/runtime.json` for the default log level. Both files are version controlled and contain no secrets.
+3. Run the startup check. It validates the path, available space, write access, and the six top-level directories.
 
 ```bash
-export DATA_ROOT=/absolute/path/to/prediction-market-data
-uv run python -m src.v1 check
+cp .env.example .env
+# Edit .env and set DATA_ROOT before running this command.
+uv run python -m src.pipeline check
 ```
 
-`DATA_MIN_FREE_GIB` defaults to 200 and may be overridden for controlled tests. `PIPELINE_LOG_LEVEL` defaults to `INFO`. Missing, unwritable, or undersized data roots fail at startup. The legacy commands below still use their former layout and are not part of the v1 writer path.
+The default capacity threshold is 200 GiB. Set `DATA_MIN_FREE_GIB=0` only in an isolated test environment. The project plan warns that the current local disk may be below the production threshold.
 
-The legacy setup command downloads and extracts the pre-collected dataset (36 GiB compressed). Do not run it as a v1 initialization step:
+### Settings and precedence
+
+| Setting | Location and default | Purpose |
+| --- | --- | --- |
+| `DATA_ROOT` | Required in `.env` or process environment | Absolute data directory; never hardcoded in pipeline code. |
+| `PIPELINE_CONFIG_DIR` | Optional environment key; defaults to repository `config/` | Alternate absolute directory containing `storage.json` and `runtime.json`. |
+| `DATA_MIN_FREE_GIB` | Environment override of `config/storage.json`, default 200 | Minimum free disk space before startup. |
+| `PIPELINE_LOG_LEVEL` | Environment override of `config/runtime.json`, default `INFO` | Validated logging level for future jobs. |
+| `POLYGON_RPC`, `POLYMARKET_START_BLOCK` | `.env.example` | Existing legacy indexer settings. |
+| `KALSHI_API_KEY_ID`, `KALSHI_PRIVATE_KEY_PEM` | Blank in `.env.example` | Reserved for a later Kalshi adapter; unused by this PR. |
+| `POLYMARKET_API_KEY`, `POLYMARKET_API_SECRET`, `POLYMARKET_API_PASSPHRASE` | Blank in `.env.example` | Reserved for later authenticated Polymarket operations; unused by this PR. |
+| `DATABASE_URL` | Blank in `.env.example` | Reserved for the PostgreSQL ledger in PR 2; unused by this PR. |
+
+Precedence is **process environment > local `.env` > version-controlled JSON default**. Empty override values fall back to JSON defaults where a default exists. `DATA_ROOT` has no fallback. Secrets are never copied into `PipelineConfig` or printed by the startup check. More details are in [config/README.md](config/README.md).
+
+### Startup errors
+
+| Message | Action |
+| --- | --- |
+| `DATA_ROOT is required` | Set `DATA_ROOT` in `.env` or export it. |
+| `DATA_ROOT must be an absolute path` | Replace a relative value with an absolute directory path. |
+| `DATA_ROOT is not writable` | Check ownership, permissions, and the parent directory. |
+| `DATA_MIN_FREE_GIB requires ...` | Use a volume with enough free space. Lower the threshold only for controlled tests. |
+| `Missing configuration file` or `Cannot read configuration file` | Restore valid `storage.json` and `runtime.json` in the selected config directory. |
+
+## Data layout and writer boundaries
+
+The startup check creates `imports/`, `bronze/`, `silver/`, `gold/`, `quarantine/`, and `manifests/` under `DATA_ROOT`. A writer is bound to one layer:
+
+| Writer role | Allowed directory |
+| --- | --- |
+| `IMPORTER` | `imports/` |
+| `COLLECTOR` | `bronze/` |
+| `NORMALIZER` | `silver/` |
+| `PRODUCT` | `gold/` |
+| `VALIDATOR` | `quarantine/` |
+| `REGISTRY` | `manifests/` |
+
+For example, a `COLLECTOR` writer accepts `bronze/source/file.jsonl` and rejects `silver/file.parquet`, absolute paths, parent traversal, symlink escapes, and replacement of existing files. It publishes a complete file after writing it to a temporary sibling. PR 2 will add manifest registration, durable directory commits, and checkpoint coordination; do not treat a PR 1 writer call as a complete pipeline transaction.
+
+## Data contracts and adapter interface
+
+[Data Contracts v2](docs/SCHEMAS.md) defines the Bronze raw envelope, eight Silver datasets, and four Gold products. The JSON registry in `src/pipeline/schema_registry.json` is checked against that document in tests. `validate_record` enforces row shape, types, UTC timestamps, numeric bounds, JSON shape, and selected point-in-time rules. File-wide uniqueness, coverage, and source-specific quality checks belong to the later validation gate.
+
+`VenueAdapter` declares eight operations and eight metadata areas. `MockVenueAdapter` uses only in-memory data and demonstrates market discovery and normalization, trade normalization, and book-event normalization without real API calls. Future venue adapters must implement that interface.
+
+## Run checks
 
 ```bash
-make setup
+uv run ruff check .
+uv run ruff format --check .
+uv run pytest tests/ -v
 ```
 
-This downloads `data.tar.zst` from [Cloudflare R2 Storage](https://s3.jbecker.dev/data.tar.zst) and extracts it to `data/`.
+The focused acceptance tests are in `tests/test_pipeline_foundation.py`. They cover startup failures, configuration precedence, writer boundaries, schema/document agreement, point-in-time checks, and the mock adapter chain.
 
-### Data Collection
+## Legacy workflow
 
-Collect market and trade data from prediction market APIs:
+The older collection and analysis commands remain available while their migration is planned. They still use the former `data/kalshi/` and `data/polymarket/` layout and are outside the new `DATA_ROOT` writer path. Do not use `make setup` to initialize the new pipeline: it downloads and extracts a large archive into the legacy layout.
 
 ```bash
 make index
-```
-
-This opens an interactive menu to select which indexer to run. Data is saved to `data/kalshi/` and `data/polymarket/` directories. Progress is saved automatically, so you can interrupt and resume collection.
-
-### Running Analyses
-
-```bash
 make analyze
-```
-
-This opens an interactive menu to select which analysis to run. You can run all analyses or select a specific one. Output files (PNG, PDF, CSV, JSON) are saved to `output/`.
-
-### Packaging Data
-
-To compress the data directory for storage/distribution:
-
-```bash
 make package
-```
-
-This creates a zstd-compressed tar archive (`data.tar.zst`) and removes the `data/` directory.
-
-## Project Structure
-
-```
-├── src/
-│   ├── analysis/           # Analysis scripts
-│   │   ├── kalshi/         # Kalshi-specific analyses
-│   │   └── polymarket/     # Polymarket-specific analyses
-│   ├── indexers/           # Data collection indexers
-│   │   ├── kalshi/         # Kalshi API client and indexers
-│   │   └── polymarket/     # Polymarket API/blockchain indexers
-│   └── common/             # Shared utilities and interfaces
-├── data/                   # Data directory (extracted from data.tar.zst)
-│   ├── kalshi/
-│   │   ├── markets/
-│   │   └── trades/
-│   └── polymarket/
-│       ├── blocks/
-│       ├── markets/
-│       └── trades/
-├── docs/                   # Documentation
-└── output/                 # Analysis outputs (figures, CSVs)
 ```
 
 ## Documentation
 
-- [Data Contracts v2](docs/SCHEMAS.md) - Bronze, Silver, and Gold contracts
-- [Architecture decision](docs/ADR-001-v1-architecture.md) - v1 storage and scheduling choices
-- [Writing Analyses](docs/ANALYSIS.md) - Guide for writing custom analysis scripts
-
-## Contributing
-
-If you'd like to contribute to this project, please open a pull-request with your changes, as well as detailed information on what is changed, added, or improved.
-
-For more information, see the [contributing guide](CONTRIBUTING.md).
-
-## Issues
-
-If you've found an issue or have a question, please open an issue [here](https://github.com/jon-becker/prediction-market-analysis/issues).
+- [Architecture and execution plan](PROJECT.md)
+- [Data contracts](docs/SCHEMAS.md)
+- [Architecture decision record](docs/ADR-001-v1-architecture.md)
+- [Configuration guide](config/README.md)
+- [Writing analyses in the legacy workflow](docs/ANALYSIS.md)
 
 ## Research & Citations
 

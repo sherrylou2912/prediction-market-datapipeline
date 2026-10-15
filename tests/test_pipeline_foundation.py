@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
+import sys
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -11,18 +15,19 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
-from src.v1.__main__ import main
-from src.v1.adapter import VenueAdapter
-from src.v1.config import ConfigError, PipelineConfig
-from src.v1.contracts import (
+from src.pipeline.__main__ import main
+from src.pipeline.adapter import VenueAdapter
+from src.pipeline.config import ConfigError, PipelineConfig
+from src.pipeline.contracts import (
     SCHEMA_REGISTRY,
     SCHEMA_VERSION,
     ContractError,
     arrow_schema,
+    get_contract,
     validate_record,
 )
-from src.v1.layout import DataLayout, WriteBoundaryError, WriterRole
-from src.v1.mock_adapter import MockVenueAdapter
+from src.pipeline.layout import DataLayout, WriteBoundaryError, WriterRole
+from src.pipeline.mock_adapter import MockVenueAdapter
 
 
 def test_config_requires_absolute_data_root_and_reports_unwritable(
@@ -36,7 +41,7 @@ def test_config_requires_absolute_data_root_and_reports_unwritable(
     def deny_write(**kwargs: object) -> None:
         raise PermissionError("test denial")
 
-    monkeypatch.setattr("src.v1.config.tempfile.TemporaryFile", deny_write)
+    monkeypatch.setattr("src.pipeline.config_validation.tempfile.TemporaryFile", deny_write)
     config = PipelineConfig.from_env({"DATA_ROOT": str(tmp_path), "DATA_MIN_FREE_GIB": "0"})
     with pytest.raises(ConfigError, match="DATA_ROOT is not writable.*test denial"):
         config.validate_startup()
@@ -44,7 +49,7 @@ def test_config_requires_absolute_data_root_and_reports_unwritable(
 
 def test_config_checks_disk_space_and_environment_overrides(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     disk = type("Disk", (), {"free": 3 * 1024**3})()
-    monkeypatch.setattr("src.v1.config.shutil.disk_usage", lambda path: disk)
+    monkeypatch.setattr("src.pipeline.config_validation.shutil.disk_usage", lambda path: disk)
     config = PipelineConfig.from_env(
         {"DATA_ROOT": str(tmp_path), "DATA_MIN_FREE_GIB": "4", "PIPELINE_LOG_LEVEL": "debug"}
     )
@@ -56,6 +61,81 @@ def test_config_checks_disk_space_and_environment_overrides(tmp_path: Path, monk
     )
     with pytest.raises(ConfigError, match="nonnegative integer"):
         PipelineConfig.from_env({"DATA_ROOT": str(tmp_path), "DATA_MIN_FREE_GIB": "-1"})
+
+
+def test_split_config_files_and_environment_precedence(tmp_path: Path) -> None:
+    config_dir = tmp_path / "settings"
+    config_dir.mkdir()
+    (config_dir / "storage.json").write_text('{"min_free_gib": 3}', encoding="utf-8")
+    (config_dir / "runtime.json").write_text('{"log_level": "WARNING"}', encoding="utf-8")
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        f"DATA_ROOT={tmp_path}/from-file\nDATA_MIN_FREE_GIB=2\nKALSHI_API_KEY_ID=private-test-value\n",
+        encoding="utf-8",
+    )
+
+    file_config = PipelineConfig.load(config_dir=config_dir, environ={}, env_file=env_file)
+    assert file_config.data_root == tmp_path / "from-file"
+    assert file_config.min_free_gib == 2
+    assert file_config.log_level == "WARNING"
+    assert "private-test-value" not in repr(file_config)
+
+    process_config = PipelineConfig.load(
+        config_dir=config_dir,
+        environ={
+            "DATA_ROOT": str(tmp_path / "from-process"),
+            "DATA_MIN_FREE_GIB": "1",
+            "PIPELINE_LOG_LEVEL": "DEBUG",
+        },
+        env_file=env_file,
+    )
+    assert process_config.data_root == tmp_path / "from-process"
+    assert process_config.min_free_gib == 1
+    assert process_config.log_level == "DEBUG"
+
+    default_config = PipelineConfig.load(config_dir=config_dir, environ={"DATA_ROOT": str(tmp_path)})
+    assert default_config.min_free_gib == 3
+    assert default_config.log_level == "WARNING"
+
+
+def test_config_files_reject_malformed_or_unexpected_values(tmp_path: Path) -> None:
+    config_dir = tmp_path / "settings"
+    config_dir.mkdir()
+    storage = config_dir / "storage.json"
+    runtime = config_dir / "runtime.json"
+    runtime.write_text('{"log_level": "INFO"}', encoding="utf-8")
+    values = {"DATA_ROOT": str(tmp_path)}
+
+    with pytest.raises(ConfigError, match="Missing configuration file"):
+        PipelineConfig.load(config_dir=config_dir, environ=values)
+    storage.write_text("{", encoding="utf-8")
+    with pytest.raises(ConfigError, match="Cannot read configuration file"):
+        PipelineConfig.load(config_dir=config_dir, environ=values)
+    storage.write_text('{"min_free_gib": true}', encoding="utf-8")
+    with pytest.raises(ConfigError, match="must be int"):
+        PipelineConfig.load(config_dir=config_dir, environ=values)
+    storage.write_text('{"min_free_gib": 2, "unknown": 1}', encoding="utf-8")
+    with pytest.raises(ConfigError, match="only the"):
+        PipelineConfig.load(config_dir=config_dir, environ=values)
+    storage.write_text('{"min_free_gib": 2}', encoding="utf-8")
+    runtime.write_text('{"log_level": "TRACE"}', encoding="utf-8")
+    with pytest.raises(ConfigError, match="PIPELINE_LOG_LEVEL"):
+        PipelineConfig.load(config_dir=config_dir, environ=values)
+    with pytest.raises(ConfigError, match="Environment file does not exist"):
+        PipelineConfig.load(config_dir=config_dir, environ=values, env_file=tmp_path / "missing.env")
+
+
+def test_config_directory_environment_override(tmp_path: Path) -> None:
+    directory = tmp_path / "settings"
+    directory.mkdir()
+    (directory / "storage.json").write_text('{"min_free_gib": 7}', encoding="utf-8")
+    (directory / "runtime.json").write_text('{"log_level": "ERROR"}', encoding="utf-8")
+    loaded = PipelineConfig.load(environ={"DATA_ROOT": str(tmp_path), "PIPELINE_CONFIG_DIR": str(directory)})
+    assert loaded.config_dir == directory
+    assert loaded.min_free_gib == 7
+    assert loaded.log_level == "ERROR"
+    with pytest.raises(ConfigError, match="PIPELINE_CONFIG_DIR must be an absolute path"):
+        PipelineConfig.load(environ={"DATA_ROOT": str(tmp_path), "PIPELINE_CONFIG_DIR": "relative/config"})
 
 
 def test_layout_creates_layers_and_writer_enforces_scope(tmp_path: Path) -> None:
@@ -87,6 +167,28 @@ def test_writer_rejects_symlink_escape(tmp_path: Path) -> None:
     assert not list(outside.iterdir())
 
 
+def test_layout_rejects_symlinked_layer(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "bronze").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(WriteBoundaryError, match="real directory"):
+        DataLayout.create(root)
+
+
+def test_writer_cleans_temporary_file_on_publish_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    layout = DataLayout.create(tmp_path)
+
+    def deny_link(source: str, target: Path) -> None:
+        raise OSError("test publication failure")
+
+    monkeypatch.setattr("src.pipeline.layout.os.link", deny_link)
+    with pytest.raises(OSError, match="test publication failure"):
+        layout.writer(WriterRole.COLLECTOR).write_new("bronze/failure.bin", b"payload")
+    assert not list((tmp_path / "bronze").iterdir())
+
+
 @pytest.mark.parametrize("role", list(WriterRole))
 def test_each_writer_is_bound_to_its_layer(tmp_path: Path, role: WriterRole) -> None:
     layout = DataLayout.create(tmp_path)
@@ -106,6 +208,8 @@ def test_schema_document_matches_code_registry() -> None:
     assert declared == SCHEMA_REGISTRY
     assert declared["version"] == SCHEMA_VERSION
     assert len(declared["datasets"]) == 13
+    with pytest.raises(ContractError, match="Unknown dataset"):
+        get_contract("silver.unknown")
     for dataset, contract in declared["datasets"].items():
         schema = arrow_schema(dataset)
         assert schema.names == list(contract["fields"])
@@ -136,6 +240,8 @@ def test_bronze_and_silver_validation_rejects_bad_rows() -> None:
     validate_record("bronze.raw", raw)
     with pytest.raises(ContractError, match="valid JSON"):
         validate_record("bronze.raw", {**raw, "raw_payload": "{bad"})
+    with pytest.raises(ContractError, match="valid JSON"):
+        validate_record("bronze.raw", {**raw, "raw_payload": "NaN"})
     with pytest.raises(ContractError, match="timezone-aware UTC"):
         validate_record("bronze.raw", {**raw, "received_at": when.replace(tzinfo=None)})
     with pytest.raises(ContractError, match="unknown fields"):
@@ -149,6 +255,42 @@ def test_bronze_and_silver_validation_rejects_bad_rows() -> None:
         validate_record("silver.trades", {**trade, "price": Decimal("1.1")})
     with pytest.raises(ContractError, match="finite Decimal"):
         validate_record("silver.trades", {**trade, "price": 0.65})
+    with pytest.raises(ContractError, match="decimal128"):
+        validate_record("silver.trades", {**trade, "price": Decimal("0.12345678901")})
+
+
+def test_gold_one_second_requires_aligned_utc_time() -> None:
+    when = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    row = {
+        "venue": "mock",
+        "market_id": "mock-1",
+        "outcome_id": "yes",
+        "second": when,
+        "best_bid": Decimal("0.4"),
+        "best_ask": Decimal("0.6"),
+        "spread": Decimal("0.2"),
+        "mid": Decimal("0.5"),
+        "microprice": None,
+        "bid_depth_top_n": None,
+        "ask_depth_top_n": None,
+        "imbalance": None,
+        "last_trade_price": None,
+        "rolling_volume": Decimal("0"),
+        "update_count": 0,
+        "book_age_ms": None,
+        "receive_latency_ms": None,
+        "gap": False,
+        "recovery": False,
+        "as_of": when,
+        "source_manifest_ids": '["manifest-1"]',
+        "schema_version": SCHEMA_VERSION,
+    }
+    validate_record("gold.market_1s", row)
+    assert pa.Table.from_pylist([row], schema=arrow_schema("gold.market_1s")).num_rows == 1
+    with pytest.raises(ContractError, match="align to a UTC second"):
+        validate_record("gold.market_1s", {**row, "second": when + timedelta(microseconds=1)})
+    with pytest.raises(ContractError, match="between 0 and 1"):
+        validate_record("gold.market_1s", {**row, "best_bid": Decimal("1.1")})
 
 
 def test_training_features_obey_point_in_time_contract() -> None:
@@ -176,9 +318,15 @@ def test_training_features_obey_point_in_time_contract() -> None:
 
 
 def test_mock_adapter_discover_to_normalize_chain() -> None:
+    with pytest.raises(TypeError):
+        VenueAdapter()
     adapter = MockVenueAdapter()
     assert isinstance(adapter, VenueAdapter)
     assert len(adapter.metadata.capabilities) == 4
+    with pytest.raises(ValueError, match="rate limits"):
+        replace(adapter.metadata, rate_limits={"requests_per_second": 0})
+    with pytest.raises(ValueError, match="eight"):
+        replace(adapter.metadata, validation_rules=())
     discovered = adapter.discover_markets()
     assert discovered.next_cursor is None
     market = adapter.normalize_market(discovered.items[0])
@@ -198,7 +346,7 @@ def test_mock_adapter_discover_to_normalize_chain() -> None:
     validate_record("silver.book_deltas", book)
 
 
-def test_v1_cli_reports_configuration_errors_and_prepares_layout(
+def test_pipeline_cli_reports_configuration_errors_and_prepares_layout(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     assert main(["check"], environ={}) == 2
@@ -206,3 +354,18 @@ def test_v1_cli_reports_configuration_errors_and_prepares_layout(
     assert main(["check"], environ={"DATA_ROOT": str(tmp_path), "DATA_MIN_FREE_GIB": "0"}) == 0
     assert "data directory ready" in capsys.readouterr().out
     assert (tmp_path / "manifests").is_dir()
+
+
+def test_module_entry_point_runs_in_a_new_process(tmp_path: Path) -> None:
+    environment = {**os.environ, "DATA_ROOT": str(tmp_path), "DATA_MIN_FREE_GIB": "0"}
+    result = subprocess.run(
+        [sys.executable, "-m", "src.pipeline", "check"],
+        cwd=Path(__file__).parents[1],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "pipeline data directory ready" in result.stdout
+    assert (tmp_path / "bronze").is_dir()

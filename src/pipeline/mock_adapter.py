@@ -7,8 +7,8 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
-from src.v1.adapter import AdapterMetadata, Page, RawRecord, VenueAdapter
-from src.v1.contracts import SCHEMA_VERSION, validate_record
+from src.pipeline.adapter import AdapterMetadata, Page, RawRecord, VenueAdapter
+from src.pipeline.contracts import SCHEMA_VERSION, validate_record
 
 
 class MockVenueAdapter(VenueAdapter):

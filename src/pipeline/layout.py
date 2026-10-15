@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -69,9 +71,16 @@ class ScopedWriter:
             if resolved_parent != layer and layer not in resolved_parent.parents:
                 raise WriteBoundaryError(f"Writer path escapes {self.role.value}/: {path}")
         target = parent / relative.parts[-1]
+        descriptor, temporary_name = tempfile.mkstemp(prefix=".partial-", dir=parent)
         try:
-            with target.open("xb") as handle:
+            with os.fdopen(descriptor, "wb") as handle:
                 handle.write(payload)
-        except FileExistsError as exc:
-            raise WriteBoundaryError(f"Append-only writer refuses to replace: {target}") from exc
+                handle.flush()
+                os.fsync(handle.fileno())
+            try:
+                os.link(temporary_name, target)
+            except FileExistsError as exc:
+                raise WriteBoundaryError(f"Append-only writer refuses to replace: {target}") from exc
+        finally:
+            Path(temporary_name).unlink(missing_ok=True)
         return target
