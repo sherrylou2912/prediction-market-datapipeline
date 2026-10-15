@@ -18,6 +18,7 @@ Project: prediction-market-datapipeline.
 7. Update affected documentation with every PR.
 8. Derive all new pipeline data paths from `DATA_ROOT`. Use a layer-scoped writer for data writes.
 9. Read-only task entry points call `PipelineConfig.validate_for_read()`. Write-producing task entry points call `PipelineConfig.validate_for_write()` before `DataLayout.create()` or any data write. Keep the general `check` command free of disk-space probes and write side effects.
+10. Put tunable job and experiment parameters in `src/config/` instead of scattering literals through task code. Provide documented defaults only when they are safe; keep required values explicit. Validate every effective parameter, including type, range, and relationships with other parameters, before an experiment starts or data processing has side effects. Reject invalid settings immediately with a clear error. At job start, log the effective non-secret values and whether defaults or overrides were used; never log secrets.
 
 ## Conventions
 
