@@ -22,35 +22,50 @@ _ARROW_TYPES = {
     "decimal": pa.decimal128(28, 10),
     "json": pa.string(),
 }
-# These PR 1 field-name rules require manual updates when a schema gains constrained fields.
-# Declare ranges and other field-level constraints in the schema registry before relying on schema evolution.
+# PR 1 range rules are dataset-scoped because a field name can have different
+# meanings across contracts. A future schema revision should declare these
+# constraints with the fields in the registry instead of maintaining code lists.
 _PROBABILITIES = {
-    "price",
-    "payout",
-    "best_bid",
-    "best_ask",
-    "mid",
-    "microprice",
-    "last_trade_price",
-    "label",
+    ("silver.market_states", "best_bid"),
+    ("silver.market_states", "best_ask"),
+    ("silver.trades", "price"),
+    ("silver.book_deltas", "price"),
+    ("silver.settlements", "payout"),
+    ("gold.market_1s", "best_bid"),
+    ("gold.market_1s", "best_ask"),
+    ("gold.market_1s", "mid"),
+    ("gold.market_1s", "microprice"),
+    ("gold.market_1s", "last_trade_price"),
+    ("gold.training_datasets", "label"),
 }
 _NONNEGATIVE = {
-    "record_index",
-    "bronze_record_index",
-    "sequence",
-    "source_sequence",
-    "quantity",
-    "volume",
-    "trade_count",
-    "rolling_volume",
-    "update_count",
-    "book_age_ms",
-    "receive_latency_ms",
-    "bid_depth_top_n",
-    "ask_depth_top_n",
-    "depth_top_n",
-    "spread",
+    ("bronze.raw", "record_index"),
+    ("bronze.raw", "sequence"),
+    ("silver.events", "bronze_record_index"),
+    ("silver.markets", "bronze_record_index"),
+    ("silver.outcomes", "bronze_record_index"),
+    ("silver.market_states", "bronze_record_index"),
+    ("silver.trades", "bronze_record_index"),
+    ("silver.trades", "quantity"),
+    ("silver.book_snapshots", "bronze_record_index"),
+    ("silver.book_snapshots", "source_sequence"),
+    ("silver.book_deltas", "bronze_record_index"),
+    ("silver.book_deltas", "source_sequence"),
+    ("silver.book_deltas", "quantity"),
+    ("silver.settlements", "bronze_record_index"),
+    ("gold.market_daily", "volume"),
+    ("gold.market_daily", "trade_count"),
+    ("gold.market_1s", "spread"),
+    ("gold.market_1s", "bid_depth_top_n"),
+    ("gold.market_1s", "ask_depth_top_n"),
+    ("gold.market_1s", "rolling_volume"),
+    ("gold.market_1s", "update_count"),
+    ("gold.market_1s", "book_age_ms"),
+    ("gold.market_1s", "receive_latency_ms"),
+    ("gold.liquidity_features", "spread"),
+    ("gold.liquidity_features", "depth_top_n"),
 }
+_IMBALANCE = {("gold.market_1s", "imbalance"), ("gold.liquidity_features", "imbalance")}
 
 
 class ContractError(ValueError):
@@ -134,15 +149,15 @@ def validate_record(dataset: str, record: Mapping[str, Any]) -> None:
             except (pa.ArrowInvalid, pa.ArrowTypeError, ValueError) as exc:
                 raise ContractError(f"{dataset}.{name} exceeds decimal128(28, 10)") from exc
 
-        if name in _PROBABILITIES and not Decimal(0) <= value <= Decimal(1):
+        if (dataset, name) in _PROBABILITIES and not Decimal(0) <= value <= Decimal(1):
             raise ContractError(f"{dataset}.{name} must be between 0 and 1")
-        if name in _NONNEGATIVE and value < 0:
+        if (dataset, name) in _NONNEGATIVE and value < 0:
             raise ContractError(f"{dataset}.{name} must be nonnegative")
-        if name == "imbalance" and not Decimal(-1) <= value <= Decimal(1):
+        if (dataset, name) in _IMBALANCE and not Decimal(-1) <= value <= Decimal(1):
             raise ContractError(f"{dataset}.{name} must be between -1 and 1")
-        if name == "second" and value.microsecond != 0:
+        if (dataset, name) == ("gold.market_1s", "second") and value.microsecond != 0:
             raise ContractError(f"{dataset}.second must align to a UTC second")
-        if name == "day":
+        if (dataset, name) == ("gold.market_daily", "day"):
             try:
                 if date.fromisoformat(value).isoformat() != value:
                     raise ValueError("not an ISO date")

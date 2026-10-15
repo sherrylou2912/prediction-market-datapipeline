@@ -308,3 +308,5 @@ This JSON block is the field-level source of truth. Every dataset has a primary 
 ## Validation boundary
 
 The PR 1 row validator checks exact field shape, types, required values, schema version, basic numeric ranges, UTC timestamps, JSON arrays, and training feature time bounds. Bronze preserves the source payload even if downstream validation fails. The PR 4 gate will check file-wide key uniqueness, referential integrity, coverage, and venue-specific quality rules; failures go to `quarantine/` with reasons. Stream sequence gaps must be represented in raw events and reflected by `gold.market_1s.gap`, never silently interpolated.
+
+Numeric range rules in PR 1 are scoped to both dataset and field. In particular, `silver.outcomes.label` is display text, while the nullable decimal `gold.training_datasets.label` is constrained to the range 0–1 when present. A later schema version should declare field-level ranges in the registry so new fields cannot bypass validation through a missing code-list entry.

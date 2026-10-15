@@ -284,6 +284,46 @@ def test_schema_document_matches_code_registry() -> None:
             assert isinstance(field.type, pa.DataType)
 
 
+def test_silver_outcomes_accepts_text_label() -> None:
+    observed_at = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    row = {
+        "venue": "mock",
+        "outcome_id": "yes",
+        "market_id": "mock-1",
+        "label": "YES",
+        "observed_at": observed_at,
+        "bronze_run_id": "mock-run",
+        "bronze_record_index": 1,
+        "schema_version": SCHEMA_VERSION,
+    }
+    validate_record("silver.outcomes", row)
+    with pytest.raises(ContractError, match="silver.outcomes.label must be a string"):
+        validate_record("silver.outcomes", {**row, "label": Decimal("0.5")})
+
+
+@pytest.mark.parametrize("dataset", tuple(SCHEMA_REGISTRY["datasets"]))
+def test_every_dataset_accepts_a_populated_contract_row(dataset: str) -> None:
+    observed_at = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    examples = {
+        "str": "example",
+        "int": 1,
+        "bool": False,
+        "utc_datetime": observed_at,
+        "decimal": Decimal("0.5"),
+        "json": "{}",
+    }
+    row = {field: examples[spec.rstrip("?")] for field, spec in SCHEMA_REGISTRY["datasets"][dataset]["fields"].items()}
+    row["schema_version"] = SCHEMA_VERSION
+    if "day" in row:
+        row["day"] = "2024-01-01"
+    if "source_manifest_ids" in row:
+        row["source_manifest_ids"] = '["manifest-1"]'
+    for field in ("bids", "asks"):
+        if field in row:
+            row[field] = "[]"
+    validate_record(dataset, row)
+
+
 def test_bronze_and_silver_validation_rejects_bad_rows() -> None:
     when = datetime(2024, 1, 1, tzinfo=timezone.utc)
     raw = {
@@ -380,6 +420,11 @@ def test_training_features_obey_point_in_time_contract() -> None:
             {**row, "max_feature_event_time": when, "source_manifest_ids": "[]"},
         )
     validate_record("gold.training_datasets", {**row, "max_feature_event_time": when})
+    with pytest.raises(ContractError, match="gold.training_datasets.label must be between 0 and 1"):
+        validate_record(
+            "gold.training_datasets",
+            {**row, "max_feature_event_time": when, "label": Decimal("1.1")},
+        )
 
 
 def test_mock_adapter_discover_to_normalize_chain() -> None:

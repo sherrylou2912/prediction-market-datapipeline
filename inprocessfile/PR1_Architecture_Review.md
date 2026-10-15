@@ -72,9 +72,9 @@
 | `arrow_schema` | 准备把合格记录交给 Arrow 或 Parquet 时，把字段顺序、类型、可空性和版本转成 Arrow schema。 | `test_schema_document_matches_code_registry` 核对 13 种数据的字段、可空性和版本；`test_gold_one_second_requires_aligned_utc_time` 与 `test_mock_adapter_discover_to_normalize_chain` 把样本实际转成 Arrow 表。 |
 | `_parse_json` | `validate_record` 遇到要求 JSON 文本的字段时调用，识别损坏的 JSON。 | `test_bronze_and_silver_validation_rejects_bad_rows` 用坏 JSON 和 `NaN` 字符串检查拒绝，属于经 `validate_record` 的间接覆盖。 |
 | `_parse_json` 内部的 `reject_constant` | JSON 解析器遇到非标准 `NaN` 等常量时自动调用，防止错误值混入。 | 上述 `NaN` 用例经 `_parse_json` 间接触发并得到契约错误；没有单独直接调用这个内部回调。 |
-| `validate_record` | 一行 Bronze、Silver 或 Gold 数据进入下一步前调用。检查缺栏、多栏、类型、UTC 时间、数字精度和范围、JSON 形状；训练数据还防止使用观察时点之后才知道的特征。 | `test_bronze_and_silver_validation_rejects_bad_rows` 检查坏 JSON、时间、额外字段、负数、价格和精度；`test_gold_one_second_requires_aligned_utc_time` 检查秒对齐与价格；`test_training_features_obey_point_in_time_contract` 检查未来特征和空 manifest 列表；mock 链路检查正常市场、成交和盘口记录。 |
+| `validate_record` | 一行 Bronze、Silver 或 Gold 数据进入下一步前调用。检查缺栏、多栏、类型、UTC 时间、数字精度和范围、JSON 形状；范围规则同时匹配数据集和字段，避免同名字段语义冲突。训练数据还防止使用观察时点之后才知道的特征。 | `test_every_dataset_accepts_a_populated_contract_row` 对全部 13 种数据集逐一送入填好值的记录；`test_silver_outcomes_accepts_text_label` 确认文字 `YES` 合法、把它改成小数会得到 `ContractError`；Bronze/Silver 异常测试检查坏 JSON、时间、额外字段、负数、价格和精度；Gold 秒级测试检查对齐和价格；训练数据测试检查未来特征、空 manifest 列表和越界小数标签；mock 链路检查市场、成交和盘口记录。 |
 
-`test_schema_document_matches_code_registry` 直接断言文档中的 JSON 与程序注册表完全相等。当前价格、概率和非负范围仍靠代码里的字段名集合识别：新添一个需要范围约束的字段，如果忘记同步集合，行校验可能放过越界值。代码注释已明确这个维护风险；未来升级数据契约时应将字段范围声明移进 schema registry，并测试新增字段的拒绝路径。当前是**逐行**验证；跨文件主键唯一性、时间覆盖和 venue 特有质量规则未在 PR1 实现。文档与代码相等，不代表真实 venue 数据已经适配。
+`test_schema_document_matches_code_registry` 直接断言文档中的 JSON 与程序注册表完全相等。此次发现 `silver.outcomes.label` 是展示文字，而 `gold.training_datasets.label` 是小数训练标签；原先只按字段名匹配概率规则，导致前者抛出未捕获的 `TypeError`。现已按“数据集 + 字段”限定范围规则，并用真实行验证所有 13 种数据集。但这些规则仍写在代码集合中：将来新增受范围约束的字段，若忘记同步集合，仍可能漏判。后续数据契约升级应将范围声明移入 schema registry，并测试新增字段的拒绝路径。现有全覆盖测试只证明 13 种数据集的**有效样本**能通过，未对每种数据集的全部异常分支逐一测试。当前仍是逐行验证；跨文件主键唯一性、时间覆盖和 venue 特有质量规则未在 PR1 实现。
 
 ## 文件：[`src/adapters/base.py`](../src/adapters/base.py)
 
@@ -130,8 +130,8 @@
 .venv/bin/pytest tests/ -q
 ```
 
-结果：Ruff 两项均通过；定向测试 **34 passed**；完整测试 **152 passed，5 warnings**。5 条 warning 来自已有第三方库与旧分析测试，没有失败测试。用户可按 [`README.md`](../README.md) 中的 `uv` 步骤复核。
+结果：Ruff 两项均通过；定向测试 **48 passed**；完整测试 **166 passed，5 warnings**。5 条 warning 来自已有第三方库与旧分析测试，没有失败测试。用户可按 [`README.md`](../README.md) 中的 `uv` 步骤复核。
 
 现有 writer 只保证本次接口所述的路径与文件发布边界；它尚未把文件、manifest 和 checkpoint 组成一致事务。空间与权限故障由测试模拟，真实磁盘填满、断电、并发换目录、真实 venue API 和真实 backtest 都未在 PR1 验证。
 
-本报告对应本地 PR1 提交：`ce97ac0`（commit0）、`3d3752e`（commit1.1）、`36b80a3`（commit1.3）、`470981a`（commit1.4）。
+本报告只覆盖 PR1 当前实现；真实适配器、数据库账本和跨文件校验尚未开始。
