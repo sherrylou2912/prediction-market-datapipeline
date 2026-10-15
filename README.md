@@ -17,7 +17,7 @@ The PR 1 pipeline foundation provides configuration loading, startup checks, six
 | `src/data_schema/` | Versioned Bronze, Silver, and Gold row contracts. |
 | `src/data_io/` | Create data directories and restrict each writer to its assigned layer. |
 | `src/adapters/` | Venue interface and a deterministic mock implementation. |
-| `src/cli.py`, `src/__main__.py` | The `python -m src check` startup command. |
+| `src/cli.py`, `src/__main__.py` | The non-writing `python -m src check` configuration command. |
 | `src/common/`, `src/indexers/`, `src/analysis/` | Existing legacy code; its migration is outside PR 1. |
 
 There is no real data loader in PR 1. `src/data_io/` contains the directory and writer foundation for future loading work.
@@ -44,7 +44,7 @@ Dependency versions are controlled, but wheel distribution is not configured: `p
 
 1. Copy `.env.example` to `.env` and set `DATA_ROOT` to an absolute path on a volume intended for pipeline data. The local `.env` is ignored by Git. The CLI reads it automatically; an exported process environment variable overrides the same key in `.env`.
 2. Edit `src/config/defaults/storage.json` for the default minimum free space and `src/config/defaults/runtime.json` for the default log level. Both files are version controlled and contain no secrets.
-3. Run the startup check. It validates the path, available space, write access, and the six top-level directories.
+3. Run the configuration check. It validates the settings and data path without checking free space, testing write access, or creating directories. A missing `DATA_ROOT` directory is reported as pending creation, not as a configuration failure.
 
 ```bash
 cp .env.example .env
@@ -52,7 +52,17 @@ cp .env.example .env
 uv run python -m src check
 ```
 
-The default capacity threshold is 200 GiB. Set `DATA_MIN_FREE_GIB=0` only in an isolated test environment. The project plan warns that the current local disk may be below the production threshold.
+The default capacity threshold is 200 GiB and applies only to jobs that will write data. Set `DATA_MIN_FREE_GIB=0` only in an isolated test environment. A low-space volume does not prevent the general check or a read-only job from running.
+
+### Checks performed by each entry point
+
+| Entry point | Checks | Side effects |
+| --- | --- | --- |
+| `python -m src check` | Configuration values and whether `DATA_ROOT` can be a directory. | None; a missing directory is reported but not created. |
+| `PipelineConfig.validate_for_read()` | Existing `DATA_ROOT` is readable. | None; does not check free space or write access. |
+| `PipelineConfig.validate_for_write()` | Free disk space, directory creation, and actual write access. | May create `DATA_ROOT`; the write job then calls `DataLayout.create()` to prepare the six layers. |
+
+Task entry points call the appropriate method automatically. PR 1 supplies these methods and the non-writing `check` command, but does not yet include a real read or write job.
 
 ### Settings and precedence
 
@@ -60,7 +70,7 @@ The default capacity threshold is 200 GiB. Set `DATA_MIN_FREE_GIB=0` only in an 
 | --- | --- | --- |
 | `DATA_ROOT` | Required in `.env` or process environment | Absolute data directory; never hardcoded in pipeline code. |
 | `PIPELINE_CONFIG_DIR` | Optional environment key; defaults to `src/config/defaults/` | Alternate absolute directory containing `storage.json` and `runtime.json`. |
-| `DATA_MIN_FREE_GIB` | Environment override of `src/config/defaults/storage.json`, default 200 | Minimum free disk space before startup. |
+| `DATA_MIN_FREE_GIB` | Environment override of `src/config/defaults/storage.json`, default 200 | Minimum free disk space before a write-producing job. |
 | `PIPELINE_LOG_LEVEL` | Environment override of `src/config/defaults/runtime.json`, default `INFO` | Validated logging level for future jobs. |
 | `POLYGON_RPC`, `POLYMARKET_START_BLOCK` | `.env.example` | Existing legacy indexer settings. |
 | `KALSHI_API_KEY_ID`, `KALSHI_PRIVATE_KEY_PEM` | Blank in `.env.example` | Reserved for a later Kalshi adapter; unused by this PR. |
@@ -75,13 +85,15 @@ Precedence is **process environment > local `.env` > version-controlled JSON def
 | --- | --- |
 | `DATA_ROOT is required` | Set `DATA_ROOT` in `.env` or export it. |
 | `DATA_ROOT must be an absolute path` | Replace a relative value with an absolute directory path. |
-| `DATA_ROOT is not writable` | Check ownership, permissions, and the parent directory. |
-| `DATA_MIN_FREE_GIB requires ...` | Use a volume with enough free space. Lower the threshold only for controlled tests. |
+| `DATA_ROOT does not exist for a read-only job` | Point the read job to an existing data directory. |
+| `DATA_ROOT is not readable` | Check read permission on the data directory. |
+| `DATA_ROOT is not writable` | For a write job, check ownership, permissions, and the parent directory. |
+| `DATA_MIN_FREE_GIB requires ...` | For a write job, use a volume with enough free space. Lower the threshold only for controlled tests. |
 | `Missing configuration file` or `Cannot read configuration file` | Restore valid `storage.json` and `runtime.json` in the selected config directory. |
 
 ## Data layout and writer boundaries
 
-The startup check creates `imports/`, `bronze/`, `silver/`, `gold/`, `quarantine/`, and `manifests/` under `DATA_ROOT`. A writer is bound to one layer:
+After a write job passes `validate_for_write()`, it calls `DataLayout.create()` to create `imports/`, `bronze/`, `silver/`, `gold/`, `quarantine/`, and `manifests/` under `DATA_ROOT`. The general `check` command does not create these directories. A writer is bound to one layer:
 
 | Writer role | Allowed directory |
 | --- | --- |

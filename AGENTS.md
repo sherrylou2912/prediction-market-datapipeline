@@ -17,6 +17,7 @@ Project: prediction-market-datapipeline.
 6. Do not add dependencies without the project owner's approval.
 7. Update affected documentation with every PR.
 8. Derive all new pipeline data paths from `DATA_ROOT`. Use a layer-scoped writer for data writes.
+9. Read-only task entry points call `PipelineConfig.validate_for_read()`. Write-producing task entry points call `PipelineConfig.validate_for_write()` before `DataLayout.create()` or any data write. Keep the general `check` command free of disk-space probes and write side effects.
 
 ## Conventions
 

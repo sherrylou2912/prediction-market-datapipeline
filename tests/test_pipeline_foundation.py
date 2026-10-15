@@ -19,6 +19,7 @@ from src.adapters.base import VenueAdapter
 from src.adapters.mock import MockVenueAdapter
 from src.cli import main
 from src.config.settings import ConfigError, PipelineConfig
+from src.config.validation import check_configured_root
 from src.data_io.layout import DataLayout, WriteBoundaryError, WriterRole
 from src.data_schema.contracts import (
     SCHEMA_REGISTRY,
@@ -43,8 +44,9 @@ def test_config_requires_absolute_data_root_and_reports_unwritable(
 
     monkeypatch.setattr("src.config.validation.tempfile.TemporaryFile", deny_write)
     config = PipelineConfig.from_env({"DATA_ROOT": str(tmp_path), "DATA_MIN_FREE_GIB": "0"})
+    assert config.validate_for_read() == tmp_path
     with pytest.raises(ConfigError, match="DATA_ROOT is not writable.*test denial"):
-        config.validate_startup()
+        config.validate_for_write()
 
 
 def test_config_checks_disk_space_and_environment_overrides(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -55,13 +57,57 @@ def test_config_checks_disk_space_and_environment_overrides(tmp_path: Path, monk
     )
     assert config.config_dir == Path(__file__).parents[1] / "src" / "config" / "defaults"
     assert config.log_level == "DEBUG"
+    assert config.validate_for_read() == tmp_path
     with pytest.raises(ConfigError, match="DATA_MIN_FREE_GIB requires 4 GiB"):
-        config.validate_startup()
+        config.validate_for_write()
     assert (
-        PipelineConfig.from_env({"DATA_ROOT": str(tmp_path), "DATA_MIN_FREE_GIB": "0"}).validate_startup() == tmp_path
+        PipelineConfig.from_env({"DATA_ROOT": str(tmp_path), "DATA_MIN_FREE_GIB": "0"}).validate_for_write() == tmp_path
     )
     with pytest.raises(ConfigError, match="nonnegative integer"):
         PipelineConfig.from_env({"DATA_ROOT": str(tmp_path), "DATA_MIN_FREE_GIB": "-1"})
+
+
+def test_read_checks_do_not_probe_write_capacity_or_create_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "existing"
+    root.mkdir()
+    config = PipelineConfig.from_env({"DATA_ROOT": str(root), "DATA_MIN_FREE_GIB": "200"})
+
+    def unexpected_probe(*args: object, **kwargs: object) -> None:
+        pytest.fail("A read-only check must not probe write capacity")
+
+    monkeypatch.setattr("src.config.validation.shutil.disk_usage", unexpected_probe)
+    monkeypatch.setattr("src.config.validation.tempfile.TemporaryFile", unexpected_probe)
+    assert check_configured_root(root) == root
+    assert config.validate_for_read() == root
+    assert not (root / "bronze").exists()
+
+
+def test_read_check_requires_existing_readable_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "missing"
+    config = PipelineConfig.from_env({"DATA_ROOT": str(root)})
+    with pytest.raises(ConfigError, match="does not exist for a read-only job"):
+        config.validate_for_read()
+    assert not root.exists()
+
+    root.mkdir()
+
+    def deny_read(path: Path) -> None:
+        raise PermissionError("test read denial")
+
+    monkeypatch.setattr("src.config.validation.os.scandir", deny_read)
+    with pytest.raises(ConfigError, match="DATA_ROOT is not readable.*test read denial"):
+        config.validate_for_read()
+
+
+def test_write_preflight_creates_root_before_layout(tmp_path: Path) -> None:
+    root = tmp_path / "new" / "data"
+    config = PipelineConfig.from_env({"DATA_ROOT": str(root), "DATA_MIN_FREE_GIB": "0"})
+    assert not root.exists()
+    layout = DataLayout.create(config.validate_for_write())
+    assert layout.root == root
+    assert (root / "bronze").is_dir()
 
 
 def test_split_config_files_and_environment_precedence(tmp_path: Path) -> None:
@@ -347,14 +393,29 @@ def test_mock_adapter_discover_to_normalize_chain() -> None:
     validate_record("silver.book_deltas", book)
 
 
-def test_pipeline_cli_reports_configuration_errors_and_prepares_layout(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def test_pipeline_cli_checks_configuration_without_preparing_layout(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    def unexpected_probe(*args: object, **kwargs: object) -> None:
+        pytest.fail("The general check must not probe write capacity")
+
+    monkeypatch.setattr("src.config.validation.shutil.disk_usage", unexpected_probe)
+    monkeypatch.setattr("src.config.validation.tempfile.TemporaryFile", unexpected_probe)
     assert main(["check"], environ={}) == 2
     assert "DATA_ROOT is required" in capsys.readouterr().err
-    assert main(["check"], environ={"DATA_ROOT": str(tmp_path), "DATA_MIN_FREE_GIB": "0"}) == 0
-    assert "data directory ready" in capsys.readouterr().out
-    assert (tmp_path / "manifests").is_dir()
+    assert main(["check"], environ={"DATA_ROOT": str(tmp_path)}) == 0
+    assert "DATA_ROOT exists" in capsys.readouterr().out
+    assert not (tmp_path / "manifests").exists()
+
+    missing = tmp_path / "not-created"
+    assert main(["check"], environ={"DATA_ROOT": str(missing)}) == 0
+    assert "a write job will create it if permitted" in capsys.readouterr().out
+    assert not missing.exists()
+
+    file_path = tmp_path / "ordinary-file"
+    file_path.write_text("file", encoding="utf-8")
+    assert main(["check"], environ={"DATA_ROOT": str(file_path)}) == 2
+    assert "DATA_ROOT is not a directory" in capsys.readouterr().err
 
 
 def test_module_entry_point_runs_in_a_new_process(tmp_path: Path) -> None:
@@ -368,5 +429,5 @@ def test_module_entry_point_runs_in_a_new_process(tmp_path: Path) -> None:
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert "pipeline data directory ready" in result.stdout
-    assert (tmp_path / "bronze").is_dir()
+    assert "pipeline configuration valid" in result.stdout
+    assert not (tmp_path / "bronze").exists()

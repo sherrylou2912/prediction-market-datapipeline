@@ -16,7 +16,8 @@ from src.config.validation import (
     parse_data_root,
     parse_log_level,
     parse_min_free_gib,
-    validate_data_root,
+    validate_read_data_root,
+    validate_write_data_root,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -94,5 +95,10 @@ class PipelineConfig:
         """Keep the original PR 1 API while loading the split configuration files."""
         return cls.load(environ=environ)
 
-    def validate_startup(self) -> Path:
-        return validate_data_root(self.data_root, self.min_free_gib)
+    def validate_for_read(self) -> Path:
+        """Check access to existing data without requiring free write capacity."""
+        return validate_read_data_root(self.data_root)
+
+    def validate_for_write(self) -> Path:
+        """Check capacity and write access before a write-producing job."""
+        return validate_write_data_root(self.data_root, self.min_free_gib)

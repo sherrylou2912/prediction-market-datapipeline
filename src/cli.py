@@ -1,4 +1,4 @@
-"""Validate and initialize the pipeline data directory."""
+"""Check pipeline configuration without starting a data write."""
 
 from __future__ import annotations
 
@@ -7,21 +7,25 @@ import sys
 from collections.abc import Mapping, Sequence
 
 from src.config.settings import ConfigError, PipelineConfig
-from src.data_io.layout import DataLayout
+from src.config.validation import check_configured_root
 
 
 def main(argv: Sequence[str] | None = None, environ: Mapping[str, str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="pipeline startup checks")
-    parser.add_argument("command", choices=("check",), help="validate configuration and create data layers")
+    parser = argparse.ArgumentParser(description="pipeline configuration checks")
+    parser.add_argument("command", choices=("check",), help="validate configuration without writing data")
     parser.parse_args(argv)
     try:
         config = PipelineConfig.load(environ=environ)
-        root = config.validate_startup()
-        DataLayout.create(root)
+        root = check_configured_root(config.data_root)
     except (ConfigError, OSError, ValueError) as exc:
         print(f"pipeline startup failed: {exc}", file=sys.stderr)
         return 2
-    print(f"pipeline data directory ready: {root}")
+    if root.exists():
+        print(f"pipeline configuration valid; DATA_ROOT exists: {root}")
+    else:
+        print(
+            f"pipeline configuration valid; DATA_ROOT does not exist; a write job will create it if permitted: {root}"
+        )
     return 0
 
 

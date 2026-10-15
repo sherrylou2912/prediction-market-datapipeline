@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -13,7 +14,7 @@ class ConfigError(ValueError):
 
 def parse_data_root(value: str) -> Path:
     if not value.strip():
-        raise ConfigError("DATA_ROOT is required. Set it to an absolute, writable data directory.")
+        raise ConfigError("DATA_ROOT is required. Set it to an absolute data directory.")
     root = Path(value.strip()).expanduser()
     if not root.is_absolute():
         raise ConfigError(f"DATA_ROOT must be an absolute path: {value!r}")
@@ -39,7 +40,8 @@ def parse_log_level(value: str) -> str:
     return level
 
 
-def validate_data_root(root: Path, min_free_gib: int) -> Path:
+def check_configured_root(root: Path) -> Path:
+    """Check the configured path without reading, creating, or writing data."""
     existing = root
     while not existing.exists():
         if existing == existing.parent:
@@ -47,6 +49,28 @@ def validate_data_root(root: Path, min_free_gib: int) -> Path:
         existing = existing.parent
     if not existing.is_dir():
         raise ConfigError(f"DATA_ROOT is not a directory or has a non-directory parent: {existing}")
+    return root.resolve(strict=True) if root.exists() else root
+
+
+def validate_read_data_root(root: Path) -> Path:
+    """Require an existing readable data directory, without checking write capacity."""
+    checked_root = check_configured_root(root)
+    if not checked_root.exists():
+        raise ConfigError(f"DATA_ROOT does not exist for a read-only job: {checked_root}")
+    try:
+        with os.scandir(checked_root) as entries:
+            next(entries, None)
+    except OSError as exc:
+        raise ConfigError(f"DATA_ROOT is not readable: {checked_root} ({exc})") from exc
+    return checked_root
+
+
+def validate_write_data_root(root: Path, min_free_gib: int) -> Path:
+    """Check capacity and write access before a job creates or publishes data."""
+    check_configured_root(root)
+    existing = root
+    while not existing.exists():
+        existing = existing.parent
 
     try:
         free_bytes = shutil.disk_usage(existing).free
