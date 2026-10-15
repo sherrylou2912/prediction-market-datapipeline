@@ -1,6 +1,6 @@
 # Data Contracts v2
 
-This document defines the v1 pipeline's version 2 contracts. The former venue-specific Parquet layouts are legacy inputs, not canonical Silver schemas. `PROJECT.md` is authoritative for architecture and data layout.
+This document defines the v1 pipeline's version 2 contracts. The former venue-specific Parquet layouts are legacy inputs, not canonical Silver schemas. `agent/PROJECT.md` is authoritative for architecture and data layout.
 
 ## Storage and version rules
 

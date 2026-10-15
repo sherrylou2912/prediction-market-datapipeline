@@ -1,6 +1,6 @@
 # Prediction Market Data Pipeline
 
-This repository contains a legacy prediction-market analysis workflow and the foundation of a new, versioned data pipeline. The new pipeline is designed for reproducible research, traceable source records, and recoverable data collection. `PROJECT.md` is the architecture authority.
+This repository contains a legacy prediction-market analysis workflow and the foundation of a new, versioned data pipeline. The new pipeline is designed for reproducible research, traceable source records, and recoverable data collection. `agent/PROJECT.md` is the architecture authority.
 
 ## Current scope
 
@@ -134,7 +134,7 @@ make package
 
 ## Documentation
 
-- [Architecture and execution plan](PROJECT.md)
+- [Architecture and execution plan](agent/PROJECT.md)
 - [Data contracts](docs/SCHEMAS.md)
 - [Architecture decision record](docs/ADR-001-v1-architecture.md)
 - [Configuration guide](src/config/README.md)

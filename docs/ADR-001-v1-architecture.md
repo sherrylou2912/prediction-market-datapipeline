@@ -35,5 +35,5 @@ The project must support offline research and daily taker strategies while retai
 
 ## References
 
-- `PROJECT.md` sections 3 through 9 and 11
+- `agent/PROJECT.md` sections 3 through 9 and 11
 - `docs/SCHEMAS.md` version 2
