@@ -18,8 +18,7 @@ import pytest
 from src.adapters.base import VenueAdapter
 from src.adapters.mock import MockVenueAdapter
 from src.cli import main
-from src.config.settings import ConfigError, PipelineConfig
-from src.config.validation import check_configured_root
+from src.config import ConfigError, PipelineConfig
 from src.data_io.layout import DataLayout, WriteBoundaryError, WriterRole
 from src.data_schema.contracts import (
     SCHEMA_REGISTRY,
@@ -42,7 +41,7 @@ def test_config_requires_absolute_data_root_and_reports_unwritable(
     def deny_write(**kwargs: object) -> None:
         raise PermissionError("test denial")
 
-    monkeypatch.setattr("src.config.validation.tempfile.TemporaryFile", deny_write)
+    monkeypatch.setattr("src.config.models.pipeline.tempfile.TemporaryFile", deny_write)
     config = PipelineConfig.from_env({"DATA_ROOT": str(tmp_path), "DATA_MIN_FREE_GIB": "0"})
     assert config.validate_for_read() == tmp_path
     with pytest.raises(ConfigError, match="DATA_ROOT is not writable.*test denial"):
@@ -51,7 +50,7 @@ def test_config_requires_absolute_data_root_and_reports_unwritable(
 
 def test_config_checks_disk_space_and_environment_overrides(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     disk = type("Disk", (), {"free": 3 * 1024**3})()
-    monkeypatch.setattr("src.config.validation.shutil.disk_usage", lambda path: disk)
+    monkeypatch.setattr("src.config.models.pipeline.shutil.disk_usage", lambda path: disk)
     config = PipelineConfig.from_env(
         {"DATA_ROOT": str(tmp_path), "DATA_MIN_FREE_GIB": "4", "PIPELINE_LOG_LEVEL": "debug"}
     )
@@ -77,9 +76,9 @@ def test_read_checks_do_not_probe_write_capacity_or_create_directories(
     def unexpected_probe(*args: object, **kwargs: object) -> None:
         pytest.fail("A read-only check must not probe write capacity")
 
-    monkeypatch.setattr("src.config.validation.shutil.disk_usage", unexpected_probe)
-    monkeypatch.setattr("src.config.validation.tempfile.TemporaryFile", unexpected_probe)
-    assert check_configured_root(root) == root
+    monkeypatch.setattr("src.config.models.pipeline.shutil.disk_usage", unexpected_probe)
+    monkeypatch.setattr("src.config.models.pipeline.tempfile.TemporaryFile", unexpected_probe)
+    assert config.check_configured_root() == root
     assert config.validate_for_read() == root
     assert not (root / "bronze").exists()
 
@@ -96,7 +95,7 @@ def test_read_check_requires_existing_readable_directory(tmp_path: Path, monkeyp
     def deny_read(path: Path) -> None:
         raise PermissionError("test read denial")
 
-    monkeypatch.setattr("src.config.validation.os.scandir", deny_read)
+    monkeypatch.setattr("src.config.models.pipeline.os.scandir", deny_read)
     with pytest.raises(ConfigError, match="DATA_ROOT is not readable.*test read denial"):
         config.validate_for_read()
 
@@ -121,9 +120,9 @@ def test_configured_root_rejects_file_ancestor_before_write_probe(
     def unexpected_disk_probe(path: Path) -> None:
         pytest.fail("Invalid path must be rejected before checking disk space")
 
-    monkeypatch.setattr("src.config.validation.shutil.disk_usage", unexpected_disk_probe)
+    monkeypatch.setattr("src.config.models.pipeline.shutil.disk_usage", unexpected_disk_probe)
     with pytest.raises(ConfigError, match="non-directory parent"):
-        check_configured_root(root)
+        config.check_configured_root()
     with pytest.raises(ConfigError, match="non-directory parent"):
         config.validate_for_write()
 
@@ -485,8 +484,8 @@ def test_pipeline_cli_checks_configuration_without_preparing_layout(
     def unexpected_probe(*args: object, **kwargs: object) -> None:
         pytest.fail("The general check must not probe write capacity")
 
-    monkeypatch.setattr("src.config.validation.shutil.disk_usage", unexpected_probe)
-    monkeypatch.setattr("src.config.validation.tempfile.TemporaryFile", unexpected_probe)
+    monkeypatch.setattr("src.config.models.pipeline.shutil.disk_usage", unexpected_probe)
+    monkeypatch.setattr("src.config.models.pipeline.tempfile.TemporaryFile", unexpected_probe)
     assert main(["check"], environ={}) == 2
     assert "DATA_ROOT is required" in capsys.readouterr().err
     assert main(["check"], environ={"DATA_ROOT": str(tmp_path)}) == 0

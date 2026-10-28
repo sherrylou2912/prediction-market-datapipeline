@@ -6,8 +6,7 @@ import argparse
 import sys
 from collections.abc import Mapping, Sequence
 
-from src.config.settings import ConfigError, PipelineConfig
-from src.config.validation import check_configured_root
+from src.config import ConfigError, PipelineConfig
 
 
 def main(argv: Sequence[str] | None = None, environ: Mapping[str, str] | None = None) -> int:
@@ -16,7 +15,7 @@ def main(argv: Sequence[str] | None = None, environ: Mapping[str, str] | None = 
     parser.parse_args(argv)
     try:
         config = PipelineConfig.load(environ=environ)
-        root = check_configured_root(config.data_root)
+        root = config.check_configured_root()
     except (ConfigError, OSError, ValueError) as exc:
         print(f"pipeline startup failed: {exc}", file=sys.stderr)
         return 2

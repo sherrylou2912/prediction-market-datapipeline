@@ -10,7 +10,7 @@ The project must support offline research and daily taker strategies while retai
 
 ## Decision
 
-1. Keep raw historical and streaming messages in append-only JSONL.zst or Parquet.zstd files under `DATA_ROOT/bronze`. Preserve source payloads and ingestion metadata.
+1. 在 `DATA_ROOT/bronze` 保留历史和实时来源的原始内容及接收元数据，按来源选择合适格式。已保存内容不得静默改写；未来经确认并留下审计记录后，可依生命周期规则归档或清理符合条件的文件。
 2. Validate and normalize into partitioned Parquet under `DATA_ROOT/silver`. Build research products under `DATA_ROOT/gold`; retain rejected material under `DATA_ROOT/quarantine`.
 3. Query local analytical files with DuckDB. Use PostgreSQL as the future ledger for run records, checkpoints, and manifests. PR 1 defines file and schema boundaries; PR 2 implements the ledger and durable commits.
 4. Schedule jobs with explicit CLI commands and systemd or cron. Use structured logs and future PostgreSQL run records for observability.
@@ -20,7 +20,7 @@ The project must support offline research and daily taker strategies while retai
 ## Reasons
 
 - Append-only Bronze preserves the original evidence needed to investigate a bad normalization, schema change, or source correction. It also makes replay possible.
-- Partitioned Parquet and DuckDB suit scans and joins on one host without adding a query service or data warehouse operations.
+- 分区 Parquet 与 DuckDB 适合在单机扫描和关联数据，不需要独立数据仓库；未来可用本地查询服务支持 HTML 看板。
 - PostgreSQL provides a transactional ledger for checkpoint advancement and manifests; files remain the data plane. This makes recovery rules explicit.
 - CLI scheduling is easier to inspect and recover at the current scale. A larger orchestrator can be adopted after job behavior stabilizes.
 - A venue adapter boundary keeps protocol churn out of storage and canonical transformations.

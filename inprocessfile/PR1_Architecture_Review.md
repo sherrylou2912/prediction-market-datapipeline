@@ -21,32 +21,34 @@
 
 配置覆盖顺序为“进程环境变量 > 本机 `.env` > 两个 JSON 默认值”。`DATA_ROOT` 没有默认数据位置，必须由用户设置绝对路径。预留的 Kalshi、Polymarket 凭据和 `DATABASE_URL` 在 PR1 不被使用。
 
-## 文件：[`src/config/settings.py`](../src/config/settings.py)
+## 文件：[`src/config/loader.py`](../src/config/loader.py)
 
-**文件职责：**把 JSON、`.env` 和当前进程环境中的设置合成一份非敏感配置，交给启动命令或未来任务。它不访问真实 venue，也不写数据。
-
-| 函数 | 做什么；什么场景会调用 | 每个函数的测试证据 |
-| --- | --- | --- |
-| `_read_json_settings` | `PipelineConfig.load` 读取 `storage.json` 或 `runtime.json` 时调用。像检查表格模板一样，只接受约定的单个键和正确类型。 | `test_config_files_reject_malformed_or_unexpected_values` 分别制造缺文件、损坏 JSON、布尔值冒充整数、额外键，确认报配置错误。非法日志级别由后续 `parse_log_level` 拒绝，不是本函数直接拒绝。 |
-| `_read_environment` | 每次加载配置时调用。先读本机 `.env`，再用当前命令的环境变量覆盖同名设置。 | `test_split_config_files_and_environment_precedence` 给三层来源不同值，断言最终优先级；同时确认模拟密钥未进入 `PipelineConfig` 的文字表示。`test_config_files_reject_malformed_or_unexpected_values` 检查显式指定不存在的 `.env` 会报错。测试经 `load` 间接调用它。 |
-| `PipelineConfig.load` | 启动命令或未来任务需要完整设置时调用。确定配置目录、合并覆盖值，再得到数据根目录、写入空间门槛和日志级别。 | `test_split_config_files_and_environment_precedence` 检查三级覆盖和 JSON 默认值；`test_config_directory_environment_override` 检查可切换绝对配置目录、拒绝相对配置目录；`test_config_files_reject_malformed_or_unexpected_values` 检查坏文件。 |
-| `PipelineConfig.from_env` | 调用者只想用默认配置目录、从环境拿设置时调用；这是 `load` 的简化入口。 | `test_config_requires_absolute_data_root_and_reports_unwritable`、`test_config_checks_disk_space_and_environment_overrides`、`test_read_checks_do_not_probe_write_capacity_or_create_directories` 等直接使用此入口，再检查得到的配置及后续行为。 |
-| `PipelineConfig.validate_for_read` | 将来的只读 backtest 在开始读已有数据之前调用。只要求数据目录存在、可读，不关心是否还有 200 GiB 空位。 | `test_read_checks_do_not_probe_write_capacity_or_create_directories` 把空间查询和试写替换为“调用就失败”，确认只读检查没有触碰它们；`test_read_check_requires_existing_readable_directory` 检查缺目录与读取被拒；磁盘不足和不可写模拟测试也确认读取可以继续。 |
-| `PipelineConfig.validate_for_write` | 将来的采集或产品生成任务在写新文件之前调用。要求足够空闲空间、按需创建根目录，并真正试写。 | `test_config_checks_disk_space_and_environment_overrides` 模拟剩余 3 GiB、要求 4 GiB，确认阻止写入；`test_config_requires_absolute_data_root_and_reports_unwritable` 模拟试写被拒；`test_write_preflight_creates_root_before_layout` 确认可创建新根目录并接上六层布局。 |
-
-## 文件：[`src/config/validation.py`](../src/config/validation.py)
-
-**文件职责：**把原始设置变成合法值，并按任务性质检查数据路径。200 GiB 空间门槛只在写入前检查中使用。
+**文件职责：**只从 JSON、`.env` 和进程环境读取原始值；不保存 task 业务规则，也不访问真实 venue 或数据。
 
 | 函数 | 做什么；什么场景会调用 | 每个函数的测试证据 |
 | --- | --- | --- |
-| `parse_data_root` | 加载 `DATA_ROOT` 时调用。拒绝空值和相对路径，避免把数据误写到当前工作目录。 | `test_config_requires_absolute_data_root_and_reports_unwritable` 分别断言未设置和相对路径报清晰错误；其他配置成功测试间接覆盖合法绝对路径。 |
-| `parse_min_free_gib` | 加载空间门槛时调用。把文本变成非负整数，供未来写入任务使用。 | `test_config_checks_disk_space_and_environment_overrides` 验证文本 `4`、`0` 可以使用、负数被拒。JSON 中的布尔值在 `_read_json_settings` 就被拒，**当前没有单独测试直接传布尔值给本函数**。 |
-| `parse_log_level` | 加载日志级别时调用。把 `debug` 统一成 `DEBUG`，只允许五个预设级别。 | `test_config_checks_disk_space_and_environment_overrides` 检查小写 `debug` 转成 `DEBUG`；`test_config_files_reject_malformed_or_unexpected_values` 检查 `TRACE` 被拒。 |
-| `_nearest_existing_directory` | 通用检查和写入检查都会调用的内部助手。沿路径向上找到第一个已经存在的目录；如果碰到普通文件，就在查磁盘之前报错。 | `test_configured_root_rejects_file_ancestor_before_write_probe` 通过两个公开入口分别验证同一个非目录父路径被拒，并把磁盘查询替换为“调用就失败”；`test_write_preflight_creates_root_before_layout` 覆盖多级尚未创建的路径。没有单独直接调用私有助手。 |
-| `check_configured_root` | 通用 `check` 命令，以及读写检查开始时调用。借助共享助手判断路径是否适合当目录；目标尚未存在可以通过，已是普通文件则报错。 | `test_pipeline_cli_checks_configuration_without_preparing_layout` 分别检查存在的目录、尚未创建的目录、普通文件；`test_configured_root_rejects_file_ancestor_before_write_probe` 检查更深一层的普通文件父路径；无副作用测试证明不探测空间或写权限。 |
-| `validate_read_data_root` | 将来的只读任务通过 `validate_for_read` 调用。要求目录确实存在，并实际尝试列目录内容，以发现读权限问题。 | `test_read_check_requires_existing_readable_directory` 检查缺目录会失败，并模拟 `PermissionError` 检查错误说明；`test_read_checks_do_not_probe_write_capacity_or_create_directories` 检查成功且不探测写入条件。 |
-| `validate_write_data_root` | 将来的写入任务通过 `validate_for_write` 调用。通过共享助手找到目标磁盘、查空位、按需建根目录、创建临时文件确认可写。 | `test_config_checks_disk_space_and_environment_overrides` 检查磁盘不足和低门槛成功；`test_config_requires_absolute_data_root_and_reports_unwritable` 模拟实际试写失败；`test_write_preflight_creates_root_before_layout` 检查新根目录被创建；非目录父路径测试确认查磁盘前拒绝。 |
+| `load_json_setting` | `PipelineConfig.load` 读取 `storage.json` 或 `runtime.json` 时调用；每个文件只接受一个约定键和正确类型。 | `test_config_files_reject_malformed_or_unexpected_values` 制造缺文件、损坏 JSON、布尔值冒充整数和额外键，确认得到配置错误。 |
+| `load_environment` | 先读显式或默认 `.env`，再用进程环境覆盖同名设置。 | `test_split_config_files_and_environment_precedence` 检查来源优先级和 secret 不进入对象；配置文件异常测试检查显式指定不存在的 `.env`。 |
+
+## 文件：[`src/config/errors.py`](../src/config/errors.py)
+
+**文件职责：**提供公共 `ConfigError`，让 loader、model 和 CLI 使用同一种可识别错误；它本身没有 I/O。
+
+## 文件：[`src/config/models/pipeline.py`](../src/config/models/pipeline.py)
+
+**文件职责：**定义不可变 `PipelineConfig`，解析其四个共享字段，并根据任务性质检查数据路径。200 GiB 空间门槛只在写入前检查使用。
+
+| 函数或方法 | 做什么；什么场景会调用 | 每个函数的测试证据 |
+| --- | --- | --- |
+| `_parse_data_root` | 拒绝空值和相对路径，避免把数据误写到当前目录。 | `test_config_requires_absolute_data_root_and_reports_unwritable` 检查未设置和相对路径。 |
+| `_parse_min_free_gib` | 将环境文本或 JSON 整数规范为非负整数。 | `test_config_checks_disk_space_and_environment_overrides` 检查文本、零和负数；JSON 类型异常由 loader 测试覆盖。 |
+| `_parse_log_level` | 标准化大小写并只允许五种 Python 日志级别。 | 空间与环境覆盖测试检查 `debug`，坏配置测试拒绝 `TRACE`。 |
+| `_nearest_existing_directory` | 沿目标路径找到所属磁盘；遇到普通文件父路径时在空间探测前失败。 | `test_configured_root_rejects_file_ancestor_before_write_probe` 与多级目录写入测试间接覆盖。 |
+| `PipelineConfig.load` | 合并默认值与覆盖值，生成共享运行配置。 | 覆盖顺序、配置目录和坏文件测试共同覆盖。 |
+| `PipelineConfig.from_env` | 使用默认配置目录的简化入口。 | 多个读写 preflight 测试直接调用。 |
+| `PipelineConfig.check_configured_root` | 供通用 `check` 使用；只判断路径是否适合成为目录，不读写数据。 | CLI 测试覆盖存在目录、缺失目录、普通文件和无副作用要求。 |
+| `PipelineConfig.validate_for_read` | 只读任务开始前要求 `DATA_ROOT` 存在且可列目录。 | 只读无写探测测试和不可读目录测试覆盖。 |
+| `PipelineConfig.validate_for_write` | 写任务开始前检查空间、按需建根目录并实际试写。 | 空间不足、写权限失败、新目录创建和非法父路径测试覆盖。 |
 
 空间不足与读写权限失败是测试中注入的故障，没有真的填满磁盘或修改系统权限。检查目录可读，也不能代替将来对某个具体数据文件的可读性检查。
 

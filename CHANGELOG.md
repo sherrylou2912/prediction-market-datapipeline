@@ -9,3 +9,4 @@
 - Document the rule that future jobs validate tunable parameters before runs and log effective non-secret settings.
 - Share data-root ancestor validation, document the scoped writer threat model, and test missing implementations of all eight adapter operations.
 - Scope numeric row constraints by dataset and cover populated rows for all 13 v2 contracts, including text labels in Silver outcomes.
+- Split configuration loading, errors, and the `PipelineConfig` model into explicit modules, and document the required long-term config structure.

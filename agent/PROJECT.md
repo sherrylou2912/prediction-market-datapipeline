@@ -2,13 +2,17 @@
 
 > Single source of truth for all future development (v1). For a beginner-friendly walkthrough, see the Chinese explainer doc. This document is the authority when docs disagree.
 
+This document describes the project and planned PRs, not proof of implementation or current external API behavior. Verify the active branch, worktree, actual code, tests, and relevant current source documentation before making status claims. Use `agent/AGENTS.md` for shared rules and the role guides in `agent/` for the current task.
+
+负责人确认的 PR1 基础规则和实现边界见 [`docs/PR1_FOUNDATION_RULES.md`](../docs/PR1_FOUNDATION_RULES.md)。该文档补充本总览；如果两者发生冲突，以本总览为准，并在实施前与负责人确认修正。
+
 ## 1. Goal & v1 Boundaries
 
 **Goal**: Build a highly-engineered data factory for prediction-market research, without introducing unnecessary distributed complexity.
 
 | Dimension | v1 Decision |
 |---|---|
-| Primary consumers | Offline research, daily-frequency taker strategies |
+| Primary consumers | 离线研究与 taker 策略；首个研究产品以 1 分钟数据为目标 |
 | Forward-looking capability | Keep the ability to reconstruct second-level market-maker order books |
 | Venues | Kalshi + Polymarket |
 | Deployment | Single on-prem server or single cloud host |
@@ -18,7 +22,7 @@
 
 **Data correctness is the product.** This pipeline exists for one reason: downstream research and trading decisions must be able to trust the data. A single silently-corrupted dataset can invalidate months of research — or worse, lead a live strategy to the wrong conclusion. Correctness is therefore not a final "validation step"; it is designed into every layer: append-only raw storage (§3), an independent validation gate before Silver (§4), atomic checkpoints and manifests (§6), and acceptance criteria that must all pass before Phase 1 is done (§9). Whenever a choice trades correctness for speed or convenience, correctness wins. Non-negotiable.
 
-**Visualization is a first-class consumer.** Every Gold dataset ships with default visual outputs (PNG/PDF figures plus JSON chart configs for web display), produced through the unified chart interface. Charts are how researchers spot data problems early — visualization doubles as a correctness tool, not just presentation.
+**可视化是重要的数据使用方式。** 未来使用一个本地服务支持的 HTML 交互式看板，按选择的市场、时间和指标懒加载历史数据；不为每个 Parquet 文件自动生成静态图。用户可按需导出当前图表。看板展示数据版本、覆盖情况和相关问题，实际查询性能需要验证。
 
 ## 2. Status & Key Discovery
 
@@ -33,7 +37,7 @@
 
 | Component | v1 Choice | Rationale |
 |---|---|---|
-| Historical + streaming raw data | Append-only files: JSONL.zst / Parquet.zstd | Immutable, cheap |
+| Historical + streaming raw data | 保留带来源信息的原始内容和文件，按来源选择格式 | 不强制所有输入转成 JSON，保留原始证据 |
 | Normalized data | Partitioned Parquet | Fast scans by date/market |
 | Research queries | DuckDB | Serverless, single-machine |
 | Checkpoints / runs / manifests | PostgreSQL | Ledger database |
@@ -67,13 +71,15 @@ Historical archive / REST / Blockchain
                        Silver Canonical
                          │             │
                          ▼             ▼
-               Daily research    1-second market data
+              1-minute research   1-second market data
                          │             │
                          ▼             ▼
                   Taker features   Maker features
 ```
 
 **Priority rule**: historical trades can be backfilled, but historical orderbook deltas cannot — the WebSocket recorder ships first.
+
+未来数据处理流程：读取并保存原始证据，发现问题时进入人工审核与修复；合格数据可进入 Silver，最终 Gold 入库前执行独立验证。异常可经人工审核后附 caveat 继续，回测报告必须说明相关问题。未经确认的历史可用时间不得当作事实；经人工批准的假设应明确记录。
 
 ## 5. Data Layout
 
@@ -88,12 +94,14 @@ data/
 │   ├── events/ markets/ outcomes/ market_states/
 │   ├── trades/ book_snapshots/ book_deltas/ settlements/
 ├── gold/
-│   ├── market_daily/ market_1s/ liquidity_features/ training_datasets/
+│   └── <venue>/<market_id>/market_1m/<data_version>/<UTC-date>.parquet
 ├── quarantine/
 └── manifests/
 ```
 
 **Hard rule**: the data root must come from `DATA_ROOT` config. Never hardcode `data/...` paths in code.
+
+上面的 Gold 路径是首个分钟研究产品的目标约定，不表示已经实现；每个文件只含一个市场和一个 UTC 日期，同一市场的 outcome 可以共用文件。数据版本的 manifest 可引用旧版本中未变化的文件。市场 ID 必须安全映射到路径并保留来源标识。
 
 ## 6. Audit & Recoverability (Keep Record)
 
@@ -104,6 +112,8 @@ Every run must leave a complete audit trail:
   - **Advancement rule**: a checkpoint may only move forward after the data file is durably written + validated + registered in the manifest.
 - **File manifest**: path, row count, schema version, min/max event time, min/max source sequence, checksum, primary-key hash, creating run ID.
 - **Raw record envelope**: venue, source, message_type, source_event_id, event_time, received_at, ingested_at, sequence, schema_version, raw_payload.
+
+原始数据也可能来自非 venue 来源或原始文件；缺失或不适用的来源信息不能编造。Bronze 已保存内容不得静默改写；未来归档或清理必须有可核查的清单并经负责人确认，保留审核与追溯记录。每个运行的机器可读记录使用 JSON；人可读 Markdown 默认生成，可由任务设置关闭。PostgreSQL 账本、JSON 记录和文件的一致性与中断恢复属于后续实现。
 
 ## 7. Second-Level Book Storage Strategy
 
@@ -138,11 +148,11 @@ Each adapter must declare: supported capabilities, API/protocol version, primary
 
 ### 9.1 Four parallel tracks
 
-- **Track A — Download & import framework**: resumable downloads, download to `.partial`, record URL/ETag/Content-Length/SHA-256, atomic rename, extract to staging, path-traversal protection, manifest generation, promote after profile + validation; three modes: archive-only / stream-extract / delete-after-import.
+- **Track A — 下载与导入框架**：支持续传、下载至 `.partial`、记录 URL/ETag/Content-Length/SHA-256、原子重命名、解压到 staging、防路径穿越、生成 manifest，并在 profiling 和验证后提升数据。可采用仅归档、流式解压或导入后删除；删除前必须生成可审核清单并由负责人确认。
 - **Track B — Real-time recorders first**: Polymarket public market-stream recorder → Kalshi recorder (needs API credentials) → snapshot/delta reconstruction with sequence-gap detection → 1-second BBO data product.
 - **Track C — Import historical archive**: keep legacy structure untouched; read schema and time coverage; compute duplicates/gaps/outages; convert to Silver; overlap reconciliation against API backfills.
-- **Track D — Rewrite historical backfill**: Kalshi live+historical cutoff dual path; Polymarket API metadata + chain logs; confirmation/reorg handling; backfill/live handoff; reruns must be bit-identical.
-- **Disk constraint**: ~139 GiB free currently; the 36 GiB bundle needs more headroom after extraction + staging + rewrites → **do NOT run the old `make setup` directly**.
+- **Track D — 历史回填重构**：Kalshi live 和 historical cutoff 双路径；Polymarket API 元数据与链上日志；处理确认和 reorg；历史回填与实时采集交接。等价重跑应产生可复现的规范化结果；Bronze 保留重复接收证据。
+- **磁盘限制**：旧快照曾记录约 139 GiB 可用空间及 36 GiB 归档包；规划前应重新确认当前卷和归档大小。解压、staging 和重写需要额外空间 → **不要直接运行旧的 `make setup`**。
 
 ### 9.2 Phase 1 — 7 PRs
 
@@ -157,17 +167,17 @@ Each adapter must declare: supported capabilities, API/protocol version, primary
 ### 9.3 Phase 1 Done Criteria
 
 - [ ] Any job killed mid-run recovers safely
-- [ ] Re-running the same interval adds no duplicate records (idempotent)
+- [ ] 重跑同一时间范围不增加重复的规范化记录；Bronze 可以保留重复接收证据
 - [ ] Every dataset can report exact time coverage and gaps
 - [ ] Every landed file has a manifest + checksum
 - [ ] Anomalous records can never silently enter Silver
 - [ ] Any Silver row traces back to its raw payload and run
 - [ ] Book sequence gaps are detected and trigger automatic snapshot refetch
-- [ ] Daily and 1-second data pass point-in-time tests
+- [ ] 适用的研究数据集（包括 1 分钟和 1 秒产品）通过 point-in-time 测试
 
 ## 10. Open Inputs Before Kickoff
 
-1. **Data location**: 139 GiB is tight; recommend ≥200–250 GiB free, or an external disk path as `DATA_ROOT`.
+1. **数据位置**：旧快照记录的 139 GiB 可用空间较紧张；规划前重新检查当前空间，建议准备至少 200–250 GiB，或将外部磁盘路径配置为 `DATA_ROOT`。
 2. **Kalshi API key**: not blocking overall (Polymarket stream + Kalshi REST/backfill can proceed), but required for the Kalshi orderbook WebSocket.
 
 **Recommended order**: freeze design in repo docs → PRs 1–3 (config/contracts, reliable writes, resumable download + profiling) → start the large download (develop the WebSocket recorder in parallel).
@@ -180,7 +190,7 @@ Each adapter must declare: supported capabilities, API/protocol version, primary
 2. **Single source of truth**: this document is authoritative. Code, docs, and comments must agree with it; when they don't, fix them — not this document (change the document only via explicit decision).
 3. **Contracts before code**: data schemas and interfaces are written down before implementation starts.
 4. **No silent failures**: errors are logged, quarantined, or raised — never swallowed, never `except: pass`.
-5. **Reproducibility**: any run must be reproducible from (code version + config + input manifest).
+5. **可复现性**：记录代码版本、配置、输入 manifest、方法和输出，以便调查并在可行时复现。部分 NLP 模型等非确定性方法即使可追溯，也不能保证每次输出完全一致。
 6. **Secrets hygiene**: secrets come from the environment only. Never in code, logs, prompts, or docs.
 7. **Small PRs**: one PR does one thing, touches one concern, and passes all gates before merge.
 8. **Documentation is a deliverable**: every PR updates the docs it affects (PROJECT.md, schemas, docstrings, CHANGELOG).
