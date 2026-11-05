@@ -30,6 +30,136 @@ from src.data_schema.contracts import (
 )
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("data_root", Path("relative"), "DATA_ROOT must be an absolute Path"),
+        ("data_root", "/absolute/string", "DATA_ROOT must be an absolute Path"),
+        ("data_root", None, "DATA_ROOT must be an absolute Path"),
+        ("data_root", Path("/invalid\x00root"), "DATA_ROOT must not contain NUL"),
+        ("min_free_gib", -1, "DATA_MIN_FREE_GIB must be a nonnegative integer"),
+        ("min_free_gib", True, "DATA_MIN_FREE_GIB must be a nonnegative integer"),
+        ("min_free_gib", "1", "DATA_MIN_FREE_GIB must be a nonnegative integer"),
+        ("min_free_gib", 1.5, "DATA_MIN_FREE_GIB must be a nonnegative integer"),
+        ("log_level", "TRACE", "PIPELINE_LOG_LEVEL"),
+        ("log_level", None, "PIPELINE_LOG_LEVEL"),
+        ("config_dir", Path("relative"), "PIPELINE_CONFIG_DIR must be an absolute Path"),
+        ("config_dir", "/absolute/string", "PIPELINE_CONFIG_DIR must be an absolute Path"),
+        ("config_dir", None, "PIPELINE_CONFIG_DIR must be an absolute Path"),
+        ("config_dir", Path("/invalid\x00config"), "PIPELINE_CONFIG_DIR must not contain NUL"),
+    ],
+)
+def test_direct_config_and_replace_reject_invalid_fields(
+    tmp_path: Path, field: str, value: object, message: str
+) -> None:
+    valid = PipelineConfig(tmp_path / "data", 0, "INFO", tmp_path / "config")
+    with pytest.raises(ConfigError, match=message):
+        replace(valid, **{field: value})
+    values = {
+        "data_root": valid.data_root,
+        "min_free_gib": valid.min_free_gib,
+        "log_level": valid.log_level,
+        "config_dir": valid.config_dir,
+    }
+    values[field] = value
+    with pytest.raises(ConfigError, match=message):
+        PipelineConfig(**values)
+
+
+def test_direct_config_validates_and_normalizes_without_filesystem_probes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_root = tmp_path / "not-created"
+    config_dir = tmp_path / "not-read"
+
+    def unexpected_probe(*args: object, **kwargs: object) -> None:
+        pytest.fail("Constructing configuration must not check disk space or write to disk")
+
+    with monkeypatch.context() as guard:
+        guard.setattr("src.config.models.pipeline.shutil.disk_usage", unexpected_probe)
+        guard.setattr("src.config.models.pipeline.tempfile.TemporaryFile", unexpected_probe)
+        guard.setattr(Path, "mkdir", unexpected_probe)
+        guard.setattr(Path, "stat", unexpected_probe)
+        config = PipelineConfig(data_root, 0, " debug ", config_dir)
+        assert config.data_root == data_root
+        assert config.config_dir == config_dir
+        assert config.log_level == "DEBUG"
+        assert replace(config, log_level=" warning ").log_level == "WARNING"
+    assert not data_root.exists()
+    assert not config_dir.exists()
+
+
+def test_explicit_environment_isolated_from_default_dotenv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir = tmp_path / "defaults"
+    config_dir.mkdir()
+    (config_dir / "storage.json").write_text('{"min_free_gib": 3}', encoding="utf-8")
+    (config_dir / "runtime.json").write_text('{"log_level": "INFO"}', encoding="utf-8")
+    default_env = tmp_path / "default.env"
+    default_env.write_text(f"DATA_ROOT={tmp_path}/from-file\nDATA_MIN_FREE_GIB=2\n", encoding="utf-8")
+    monkeypatch.setattr("src.config.loader.DEFAULT_ENV_FILE", default_env)
+
+    with monkeypatch.context() as isolated:
+        isolated.setattr("src.config.loader.os.environ", {})
+        normal = PipelineConfig.load(config_dir=config_dir)
+        assert normal.data_root == tmp_path / "from-file"
+        assert normal.min_free_gib == 2
+
+    with pytest.raises(ConfigError, match="DATA_ROOT is required"):
+        PipelineConfig.load(config_dir=config_dir, environ={})
+    injected = PipelineConfig.load(config_dir=config_dir, environ={"DATA_ROOT": str(tmp_path / "injected")})
+    assert injected.data_root == tmp_path / "injected"
+    assert injected.min_free_gib == 3
+    explicit = PipelineConfig.load(
+        config_dir=config_dir, environ={"DATA_ROOT": str(tmp_path / "override")}, env_file=default_env
+    )
+    assert explicit.data_root == tmp_path / "override"
+    assert explicit.min_free_gib == 2
+
+
+def test_load_and_cli_reject_nul_data_root_before_path_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def unexpected_path_check(*args: object, **kwargs: object) -> None:
+        pytest.fail("A data root containing NUL must be rejected before path checks")
+
+    monkeypatch.setattr("src.config.models.pipeline._nearest_existing_directory", unexpected_path_check)
+    environ = {"DATA_ROOT": str(tmp_path / "invalid\x00data")}
+    with pytest.raises(ConfigError, match="DATA_ROOT must not contain NUL"):
+        PipelineConfig.load(environ=environ)
+    assert main(["check"], environ=environ) == 2
+    assert "DATA_ROOT must not contain NUL" in capsys.readouterr().err
+
+
+def test_load_rejects_nul_config_directory_before_reading_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def unexpected_load(*args: object, **kwargs: object) -> None:
+        pytest.fail("A config directory containing NUL must be rejected before reading defaults")
+
+    monkeypatch.setattr("src.config.models.pipeline.load_json_setting", unexpected_load)
+    invalid = tmp_path / "invalid\x00config"
+    with pytest.raises(ConfigError, match="PIPELINE_CONFIG_DIR must not contain NUL"):
+        PipelineConfig.load(config_dir=invalid, environ={"DATA_ROOT": str(tmp_path)})
+    with pytest.raises(ConfigError, match="PIPELINE_CONFIG_DIR must not contain NUL"):
+        PipelineConfig.load(environ={"DATA_ROOT": str(tmp_path), "PIPELINE_CONFIG_DIR": str(invalid)})
+    assert main(["check"], environ={"DATA_ROOT": str(tmp_path), "PIPELINE_CONFIG_DIR": str(invalid)}) == 2
+    assert "PIPELINE_CONFIG_DIR must not contain NUL" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("invalid", ["", False, 0, "/absolute/string"])
+def test_load_rejects_non_path_config_directory_before_reading_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, invalid: object
+) -> None:
+    def unexpected_load(*args: object, **kwargs: object) -> None:
+        pytest.fail("An invalid config directory must be rejected before reading defaults")
+
+    monkeypatch.setattr("src.config.models.pipeline.load_json_setting", unexpected_load)
+    with pytest.raises(ConfigError, match="PIPELINE_CONFIG_DIR must be an absolute path"):
+        PipelineConfig.load(config_dir=invalid, environ={"DATA_ROOT": str(tmp_path)})
+
+
 def test_config_requires_absolute_data_root_and_reports_unwritable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

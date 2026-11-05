@@ -61,6 +61,22 @@ class PipelineConfig:
     log_level: str
     config_dir: Path
 
+    def __post_init__(self) -> None:
+        """校验所有构造入口的共享字段，不访问或修改磁盘。"""
+        if not isinstance(self.data_root, Path) or not self.data_root.is_absolute():
+            raise ConfigError("DATA_ROOT must be an absolute Path.")
+        if "\x00" in str(self.data_root):
+            raise ConfigError("DATA_ROOT must not contain NUL characters.")
+        if type(self.min_free_gib) is not int or self.min_free_gib < 0:
+            raise ConfigError("DATA_MIN_FREE_GIB must be a nonnegative integer.")
+        if not isinstance(self.log_level, str):
+            raise ConfigError("PIPELINE_LOG_LEVEL must be DEBUG, INFO, WARNING, ERROR, or CRITICAL.")
+        if not isinstance(self.config_dir, Path) or not self.config_dir.is_absolute():
+            raise ConfigError("PIPELINE_CONFIG_DIR must be an absolute Path.")
+        if "\x00" in str(self.config_dir):
+            raise ConfigError("PIPELINE_CONFIG_DIR must not contain NUL characters.")
+        object.__setattr__(self, "log_level", _parse_log_level(self.log_level))
+
     @classmethod
     def load(
         cls,
@@ -71,9 +87,16 @@ class PipelineConfig:
     ) -> PipelineConfig:
         values = load_environment(environ, env_file)
         raw_config_dir = values.get("PIPELINE_CONFIG_DIR", "").strip()
-        directory = config_dir or (Path(raw_config_dir).expanduser() if raw_config_dir else DEFAULT_CONFIG_DIR)
-        if not directory.is_absolute():
+        if config_dir is not None:
+            directory = config_dir
+        elif raw_config_dir:
+            directory = Path(raw_config_dir).expanduser()
+        else:
+            directory = DEFAULT_CONFIG_DIR
+        if not isinstance(directory, Path) or not directory.is_absolute():
             raise ConfigError(f"PIPELINE_CONFIG_DIR must be an absolute path: {directory}")
+        if "\x00" in str(directory):
+            raise ConfigError("PIPELINE_CONFIG_DIR must not contain NUL characters.")
 
         default_minimum = load_json_setting(directory / "storage.json", "min_free_gib", int)
         default_log_level = load_json_setting(directory / "runtime.json", "log_level", str)

@@ -30,3 +30,7 @@ def main(argv: Sequence[str] | None = None, environ: Mapping[str, str] | None = 
 
 if __name__ == "__main__":
     sys.exit(main())
+    
+    
+    
+#是最终的程序入口，可以理解为app.py

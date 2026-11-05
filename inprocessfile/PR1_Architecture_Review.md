@@ -44,6 +44,7 @@
 | `_parse_min_free_gib` | 将环境文本或 JSON 整数规范为非负整数。 | `test_config_checks_disk_space_and_environment_overrides` 检查文本、零和负数；JSON 类型异常由 loader 测试覆盖。 |
 | `_parse_log_level` | 标准化大小写并只允许五种 Python 日志级别。 | 空间与环境覆盖测试检查 `debug`，坏配置测试拒绝 `TRACE`。 |
 | `_nearest_existing_directory` | 沿目标路径找到所属磁盘；遇到普通文件父路径时在空间探测前失败。 | `test_configured_root_rejects_file_ancestor_before_write_probe` 与多级目录写入测试间接覆盖。 |
+| `PipelineConfig.__post_init__` | 对加载、直接构造及 `dataclasses.replace()` 共用字段校验，检查不含 NUL 的绝对 `Path`、非负整数和有效日志级别；只规范化日志大小写，不探测磁盘。 | `test_direct_config_and_replace_reject_invalid_fields` 逐项覆盖非法字段；`test_direct_config_validates_and_normalizes_without_filesystem_probes` 检查合法值和无磁盘探测。测试是否实际运行见本次 block 报告。 |
 | `PipelineConfig.load` | 合并默认值与覆盖值，生成共享运行配置。 | 覆盖顺序、配置目录和坏文件测试共同覆盖。 |
 | `PipelineConfig.from_env` | 使用默认配置目录的简化入口。 | 多个读写 preflight 测试直接调用。 |
 | `PipelineConfig.check_configured_root` | 供通用 `check` 使用；只判断路径是否适合成为目录，不读写数据。 | CLI 测试覆盖存在目录、缺失目录、普通文件和无副作用要求。 |
@@ -122,6 +123,8 @@
 | `main` | 用户运行通用配置检查时调用。读取配置，只确认 `DATA_ROOT` 路径适合作目录；不查空闲空间、不试写、不创建目录。缺设置或错误路径返回状态码 2，正常返回 0。 | `test_pipeline_cli_checks_configuration_without_preparing_layout` 检查缺 `DATA_ROOT`、已有目录、待创建目录、普通文件；把磁盘查询与试写替换为“调用就失败”，证明没有写入检查。`test_module_entry_point_runs_in_a_new_process` 真正启动新 Python 进程执行模块命令，检查退出码和无 `bronze/` 目录。 |
 
 ## 验收结果与能力边界
+
+本节测试结果是这份历史验收报告当时的记录，不包含此后新增或修改的代码；不能作为当前工作区测试通过的证据。
 
 在 Python 3.9.6 环境下，本轮运行：
 

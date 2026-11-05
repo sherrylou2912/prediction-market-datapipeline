@@ -28,6 +28,10 @@ PR1 尚未实现真实 initial load、incremental load、validation job 或 back
 
 优先级为：进程环境变量 > 本机 `.env` > version-controlled JSON default。空的覆盖值会回退到 JSON 默认值；`DATA_ROOT` 没有默认值。
 
+正常调用 `PipelineConfig.load()` 时，会读取默认 `.env`。显式传入 `environ` 且未传 `env_file` 时，不读取本机默认 `.env`，便于隔离测试；若同时显式传入 `env_file`，则先读取该文件，再由 `environ` 中的同名值覆盖。
+
+`PipelineConfig` 无论通过 `load()` 还是直接构造，都会校验共享字段：两个路径须为绝对 `Path` 且不含 NUL 字符，空间门槛须为非负整数（不接受布尔值），日志级别须为有效级别并标准化为大写。直接构造不会读取默认文件、检查路径是否存在、创建目录、探测空闲空间或试写；正式任务仍须调用对应 preflight。
+
 ## 调用方式
 
 通用无副作用检查：

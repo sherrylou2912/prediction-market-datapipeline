@@ -21,10 +21,14 @@ src/config/
 
 | 字段 | 类型 | 规则 |
 | --- | --- | --- |
-| `data_root` | `Path` | 必须由环境提供绝对路径。 |
-| `min_free_gib` | `int` | 非负，只在写任务 preflight 中使用。 |
-| `log_level` | `str` | 仅允许 Python 标准日志级别。 |
-| `config_dir` | `Path` | 必须是包含两个默认 JSON 的绝对目录。 |
+| `data_root` | `Path` | 必须是绝对路径；`load()` 从环境读取。 |
+| `min_free_gib` | `int` | 非负且不能是布尔值，只在写任务 preflight 中使用。 |
+| `log_level` | `str` | 仅允许五种 Python 标准日志级别，并标准化为大写。 |
+| `config_dir` | `Path` | 必须是绝对路径；`load()` 须能读取其中两个默认 JSON。 |
+
+`PipelineConfig.__post_init__()` 对 `load()`、直接构造和 `dataclasses.replace()` 共用字段校验；两个路径须为不含 NUL 字符的绝对路径。`load()` 在读取默认文件之前也会拒绝含 NUL 的配置目录。直接构造只校验类型、路径形式和取值，不探测磁盘、不创建目录，也不读取默认文件；读写 preflight 仍负责实际环境检查。
+
+显式 `environ` 且没有指定 `env_file` 时，不读取本机默认 `.env`；如果明确提供 `env_file`，先读取该文件，再以 `environ` 中的同名值覆盖。未传 `environ` 时正常读取默认 `.env` 和进程环境。
 
 ## 职责边界
 
