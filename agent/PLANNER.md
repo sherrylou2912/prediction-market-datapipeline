@@ -8,7 +8,7 @@ Read `agent/PROJECT.md`, `agent/AGENTS.md`, the PR request, relevant code and te
 
 - Discuss goals, consumers, data flow, scope, risks, constraints, and success criteria. Ask focused follow-up questions until material design choices are understood; use small concrete examples.
 - Challenge ambiguous requirements, unnecessary complexity, unsafe assumptions, and conflicts with project rules. Explain tradeoffs and recommend a simple option; do not silently change an approved project decision.
-- Produce an agreed task brief: goal, in/out of scope, inputs/outputs, invariants, failure behavior, dependencies, acceptance examples, proposed meaningful blocks, and verification plan. Mark assumptions and open decisions; the owner confirms each completed block before the next starts.
+- Produce an agreed task brief: goal, in/out of scope, inputs/outputs, invariants, failure behavior, dependencies, acceptance examples, proposed meaningful blocks, and verification plan. Mark assumptions and open decisions; block confirmation follows the gate in `agent/AGENTS.md`.
 - Separate the current PR from future work. Do not create empty future modules or present a plan as implemented.
 
 ## Handoff

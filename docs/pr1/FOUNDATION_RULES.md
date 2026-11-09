@@ -1,6 +1,6 @@
 # PR1 基础规则与后续实现边界
 
-本文记录项目负责人确认的基础设计，供 PR1 后续代码块及未来数据任务使用。项目总体权威文件是 [`agent/PROJECT.md`](../agent/PROJECT.md)，配置结构以 [`src/config/developing.md`](../src/config/developing.md) 为基线；数据契约和代码仍需在后续代码块中逐项对齐本文。
+本文记录项目负责人确认的基础设计，供 PR1 后续代码块及未来数据任务使用。项目总体权威文件是 [`agent/PROJECT.md`](../../agent/PROJECT.md)，配置结构以 [`src/config/developing.md`](../../src/config/developing.md) 为基线；数据契约和代码仍需在后续代码块中逐项对齐本文。
 
 **状态：设计规则，不代表能力已实现。** 当前工作区已有配置、目录写入边界、数据契约和模拟 adapter 的部分实现；不能据此认定本文所有规则已经生效。PR1 不实现真实下载、真实 venue adapter、PostgreSQL 账本、完整隔离审核流程、分钟聚合、回测引擎或 HTML 看板。真实数据覆盖、API 细节、存储格式兼容性与吞吐量需要在对应工作中验证。
 

@@ -35,6 +35,7 @@ Project: prediction-market-datapipeline.
 - Bronze is immutable raw data; Silver is validated canonical data; Gold is a purpose-built product.
 - Use `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pytest tests/ -v` before delivery.
 - Keep legacy indexers separate from the v1 pipeline until their respective migration PRs.
+- Keep documentation in the layout described by `docs/README.md`: PR-specific plans, rules, and reading progress under `docs/pr<N>/`, architecture decision records under `docs/adr/`, and legacy-workflow docs under `docs/legacy/`. Add new documents to that index.
 - Keep the new pipeline under `src/`; do not use a version number as the source folder name. Put settings and validation in `src/config/`, contracts in `src/data_schema/`, data directory and writer code in `src/data_io/`, and venue implementations in `src/adapters/`.
 
 ## Owner notes

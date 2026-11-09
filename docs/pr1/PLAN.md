@@ -1,6 +1,6 @@
 # PR1 工作拆分计划
 
-本计划记录负责人已讨论并认可的 PR1 分块。基础设计见 [`docs/PR1_FOUNDATION_RULES.md`](../docs/PR1_FOUNDATION_RULES.md)，项目权威规则见 [`agent/PROJECT.md`](../agent/PROJECT.md)。计划不等于实现；具体代码、测试和状态以工作区及每块报告为准。
+本计划记录负责人已讨论并认可的 PR1 分块。基础设计见 [`docs/pr1/FOUNDATION_RULES.md`](FOUNDATION_RULES.md)，项目权威规则见 [`agent/PROJECT.md`](../../agent/PROJECT.md)。计划不等于实现；具体代码、测试和状态以工作区及每块报告为准。
 
 ## 目标与边界
 

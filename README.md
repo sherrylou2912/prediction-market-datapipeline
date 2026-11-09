@@ -134,14 +134,15 @@ make package
 
 ## Documentation
 
+- [Documentation index](docs/README.md)
 - [Architecture and execution plan](agent/PROJECT.md)
-- [PR1 基础规则与实现边界](docs/PR1_FOUNDATION_RULES.md)
+- [PR1 基础规则与实现边界](docs/pr1/FOUNDATION_RULES.md)
 - [Data contracts](docs/SCHEMAS.md)
-- [Architecture decision record](docs/ADR-001-v1-architecture.md)
+- [Architecture decision records](docs/adr/)
 - [Configuration guide](src/config/README.md)
 - [Configuration developer summary](src/config/README_FOR_DEVELOPER.md)
 - [Configuration evolution rules](src/config/developing.md)
-- [Writing analyses in the legacy workflow](docs/ANALYSIS.md)
+- [Writing analyses in the legacy workflow](docs/legacy/ANALYSIS.md)
 
 ## Research & Citations
 

@@ -1,5 +1,7 @@
 # PR1 架构与配置验收报告：按文件逐项核查
 
+> **已归档（2026-11-09）**：本报告已被 [`docs/pr1/CODE_READING_PROGRESS.md`](../CODE_READING_PROGRESS.md) 取代，仅作历史记录保留。其中的测试数字、`from_env` 等描述反映 2026-10-14 的状态，不代表当前代码。归档时只调整了相对链接的路径，正文未改。
+
 日期：2026 年 10 月 14 日
 
 读者：项目负责人
@@ -7,21 +9,21 @@
 
 ## 阅读方法与总体结论
 
-下文固定按 **文件名 → 该文件包含的函数 → 函数做什么及何时调用 → 每个函数的测试** 排列。测试名均指向 [`tests/test_pipeline_foundation.py`](../tests/test_pipeline_foundation.py)。写明“间接覆盖”的地方，表示测试通过上层函数走到了它，并非单独调用该函数；这不能被理解为所有异常分支都已测完。
+下文固定按 **文件名 → 该文件包含的函数 → 函数做什么及何时调用 → 每个函数的测试** 排列。测试名均指向 [`tests/test_pipeline_foundation.py`](../../../tests/test_pipeline_foundation.py)。写明“间接覆盖”的地方，表示测试通过上层函数走到了它，并非单独调用该函数；这不能被理解为所有异常分支都已测完。
 
 本次基础把配置、数据格式、写入边界和 venue 接口分别放在 `src/config/`、`src/data_schema/`、`src/data_io/`、`src/adapters/`。通用 `python -m src check` 只看配置和路径，不查空间、不试写、不建目录。将来的只读任务调用只读检查；将来的写入任务才调用空间和写入检查。PR1 提供这两种接口，尚无真实任务调用它们。
 
 | 非函数文件 | 作用 |
 | --- | --- |
-| [`src/config/defaults/storage.json`](../src/config/defaults/storage.json) | 写入任务允许开始前要求的最小空闲空间，默认 200 GiB；只读任务不因空间低于该值而停止。 |
-| [`src/config/defaults/runtime.json`](../src/config/defaults/runtime.json) | 默认日志级别 `INFO`；PR1 只读取和校验，还没有把日志级别接入实际日志输出。 |
-| [`.env.example`](../.env.example) | 当前与预留环境变量的名称；没有真实密钥。本机 `.env` 受 Git 忽略。 |
-| [`docs/SCHEMAS.md`](../docs/SCHEMAS.md) | 人读的 Bronze、Silver、Gold v2 数据契约；程序版位于 [`schema_registry.json`](../src/data_schema/schema_registry.json)。 |
-| [`pyproject.toml`](../pyproject.toml) 与 [`uv.lock`](../uv.lock) | 前者列必需库名称及开发工具，后者锁定解析版本。本次没有增加依赖；详细安装步骤见 [`README.md`](../README.md)。 |
+| [`src/config/defaults/storage.json`](../../../src/config/defaults/storage.json) | 写入任务允许开始前要求的最小空闲空间，默认 200 GiB；只读任务不因空间低于该值而停止。 |
+| [`src/config/defaults/runtime.json`](../../../src/config/defaults/runtime.json) | 默认日志级别 `INFO`；PR1 只读取和校验，还没有把日志级别接入实际日志输出。 |
+| [`.env.example`](../../../.env.example) | 当前与预留环境变量的名称；没有真实密钥。本机 `.env` 受 Git 忽略。 |
+| [`docs/SCHEMAS.md`](../../../docs/SCHEMAS.md) | 人读的 Bronze、Silver、Gold v2 数据契约；程序版位于 [`schema_registry.json`](../../../src/data_schema/schema_registry.json)。 |
+| [`pyproject.toml`](../../../pyproject.toml) 与 [`uv.lock`](../../../uv.lock) | 前者列必需库名称及开发工具，后者锁定解析版本。本次没有增加依赖；详细安装步骤见 [`README.md`](../../../README.md)。 |
 
 配置覆盖顺序为“进程环境变量 > 本机 `.env` > 两个 JSON 默认值”。`DATA_ROOT` 没有默认数据位置，必须由用户设置绝对路径。预留的 Kalshi、Polymarket 凭据和 `DATABASE_URL` 在 PR1 不被使用。
 
-## 文件：[`src/config/loader.py`](../src/config/loader.py)
+## 文件：[`src/config/loader.py`](../../../src/config/loader.py)
 
 **文件职责：**只从 JSON、`.env` 和进程环境读取原始值；不保存 task 业务规则，也不访问真实 venue 或数据。
 
@@ -30,11 +32,11 @@
 | `load_json_setting` | `PipelineConfig.load` 读取 `storage.json` 或 `runtime.json` 时调用；每个文件只接受一个约定键和正确类型。 | `test_config_files_reject_malformed_or_unexpected_values` 制造缺文件、损坏 JSON、布尔值冒充整数和额外键，确认得到配置错误。 |
 | `load_environment` | 先读显式或默认 `.env`，再用进程环境覆盖同名设置。 | `test_split_config_files_and_environment_precedence` 检查来源优先级和 secret 不进入对象；配置文件异常测试检查显式指定不存在的 `.env`。 |
 
-## 文件：[`src/config/errors.py`](../src/config/errors.py)
+## 文件：[`src/config/errors.py`](../../../src/config/errors.py)
 
 **文件职责：**提供公共 `ConfigError`，让 loader、model 和 CLI 使用同一种可识别错误；它本身没有 I/O。
 
-## 文件：[`src/config/models/pipeline.py`](../src/config/models/pipeline.py)
+## 文件：[`src/config/models/pipeline.py`](../../../src/config/models/pipeline.py)
 
 **文件职责：**定义不可变 `PipelineConfig`，解析其四个共享字段，并根据任务性质检查数据路径。200 GiB 空间门槛只在写入前检查使用。
 
@@ -53,7 +55,7 @@
 
 空间不足与读写权限失败是测试中注入的故障，没有真的填满磁盘或修改系统权限。检查目录可读，也不能代替将来对某个具体数据文件的可读性检查。
 
-## 文件：[`src/data_io/layout.py`](../src/data_io/layout.py)
+## 文件：[`src/data_io/layout.py`](../../../src/data_io/layout.py)
 
 **文件职责：**写入任务通过启动检查后创建六层目录，并限制每种 writer 只能写自己的层。只读任务和通用 `check` 不创建这些目录。
 
@@ -63,11 +65,11 @@
 | `DataLayout.writer` | 有文件要保存时，任务按岗位申请 writer。`IMPORTER→imports`、`COLLECTOR→bronze`、`NORMALIZER→silver`、`PRODUCT→gold`、`VALIDATOR→quarantine`、`REGISTRY→manifests`。 | `test_each_writer_is_bound_to_its_layer` 对六个角色分别验证本层可写、别层不可写；`test_layout_creates_layers_and_writer_enforces_scope` 检查随意传字符串角色被拒。 |
 | `ScopedWriter.write_new` | writer 真正公布一个新文件时调用。先验证路径，写临时文件并同步内容，再独占发布；同名文件不能覆盖。 | `test_layout_creates_layers_and_writer_enforces_scope` 检查正常写入以及跨层、绝对路径、`..`、同名覆盖被拒；`test_writer_rejects_symlink_escape` 检查不能通过链接写到外部；`test_writer_cleans_temporary_file_on_publish_failure` 模拟发布失败，检查目标与临时文件都没有留下；六角色参数化测试检查岗位边界。 |
 
-这属于程序接口的边界，明确假设同机进程合作、只防意外路径错误；[`write_new` 的代码注释](../src/data_io/layout.py) 也写明它不防恶意进程在检查与发布之间并发替换目录。测试没有模拟恶意并发或突然断电。文件内容在发布前已同步，但 PR1 没有实现目录元数据、manifest 和 checkpoint 的一致提交。
+这属于程序接口的边界，明确假设同机进程合作、只防意外路径错误；[`write_new` 的代码注释](../../../src/data_io/layout.py) 也写明它不防恶意进程在检查与发布之间并发替换目录。测试没有模拟恶意并发或突然断电。文件内容在发布前已同步，但 PR1 没有实现目录元数据、manifest 和 checkpoint 的一致提交。
 
-## 文件：[`src/data_schema/contracts.py`](../src/data_schema/contracts.py)
+## 文件：[`src/data_schema/contracts.py`](../../../src/data_schema/contracts.py)
 
-**文件职责：**按 [`docs/SCHEMAS.md`](../docs/SCHEMAS.md) v2 校验单条记录，并提供 Arrow 格式。Bronze 保留来源原貌；Silver 是统一格式；Gold 是分析产品。共 1 种 Bronze、8 种 Silver、4 种 Gold。
+**文件职责：**按 [`docs/SCHEMAS.md`](../../../docs/SCHEMAS.md) v2 校验单条记录，并提供 Arrow 格式。Bronze 保留来源原貌；Silver 是统一格式；Gold 是分析产品。共 1 种 Bronze、8 种 Silver、4 种 Gold。
 
 | 函数 | 做什么；什么场景会调用 | 每个函数的测试证据 |
 | --- | --- | --- |
@@ -79,7 +81,7 @@
 
 `test_schema_document_matches_code_registry` 直接断言文档中的 JSON 与程序注册表完全相等。此次发现 `silver.outcomes.label` 是展示文字，而 `gold.training_datasets.label` 是小数训练标签；原先只按字段名匹配概率规则，导致前者抛出未捕获的 `TypeError`。现已按“数据集 + 字段”限定范围规则，并用真实行验证所有 13 种数据集。但这些规则仍写在代码集合中：将来新增受范围约束的字段，若忘记同步集合，仍可能漏判。后续数据契约升级应将范围声明移入 schema registry，并测试新增字段的拒绝路径。现有全覆盖测试只证明 13 种数据集的**有效样本**能通过，未对每种数据集的全部异常分支逐一测试。当前仍是逐行验证；跨文件主键唯一性、时间覆盖和 venue 特有质量规则未在 PR1 实现。
 
-## 文件：[`src/adapters/base.py`](../src/adapters/base.py)
+## 文件：[`src/adapters/base.py`](../../../src/adapters/base.py)
 
 **文件职责：**规定每个 venue 实现必须提供什么说明与函数。它定义接口，本身不下载数据。
 
@@ -98,7 +100,7 @@
 
 现在八个抽象方法各有一个“只漏这个方法”的参数化测试，缺失时 Python 在实例化阶段抛出 `TypeError`。接口文档也明确要求：真实读取或标准化失败必须抛错，不能假装返回成功；空页只能表示来源确实没有记录。未来负责运行记录和 checkpoint 的代码还必须记录异常且不得推进进度。PR1 没有真实 adapter 或该运行层，因此**尚未测试真实异常如何被记录或隔离**。真实分页、断线、限速和 API 版本变化也未验证。
 
-## 文件：[`src/adapters/mock.py`](../src/adapters/mock.py)
+## 文件：[`src/adapters/mock.py`](../../../src/adapters/mock.py)
 
 **文件职责：**用固定的内存样本证明上面接口可走通。不联网，也不代表 Kalshi 或 Polymarket 已接入。
 
@@ -114,7 +116,7 @@
 | `normalize_trade` | 把价格和数量文字转成精确小数，生成 Silver 成交行。 | 同一测试检查价格 `0.65`，并转成一行 Arrow 表；`test_bronze_and_silver_validation_rejects_bad_rows` 基于该行制造越界价格。 |
 | `normalize_book_event` | 把固定盘口事件转成 Silver 盘口增量。 | 同一测试检查来源序号为 1，并再次通过 `validate_record`。 |
 
-## 文件：[`src/cli.py`](../src/cli.py) 与 [`src/__main__.py`](../src/__main__.py)
+## 文件：[`src/cli.py`](../../../src/cli.py) 与 [`src/__main__.py`](../../../src/__main__.py)
 
 `src/cli.py` 中唯一的函数是 `main`。`src/__main__.py` 没有另写函数，只把 `python -m src check` 交给 `main`。
 
@@ -135,7 +137,7 @@
 .venv/bin/pytest tests/ -q
 ```
 
-结果：Ruff 两项均通过；定向测试 **48 passed**；完整测试 **166 passed，5 warnings**。5 条 warning 来自已有第三方库与旧分析测试，没有失败测试。用户可按 [`README.md`](../README.md) 中的 `uv` 步骤复核。
+结果：Ruff 两项均通过；定向测试 **48 passed**；完整测试 **166 passed，5 warnings**。5 条 warning 来自已有第三方库与旧分析测试，没有失败测试。用户可按 [`README.md`](../../../README.md) 中的 `uv` 步骤复核。
 
 现有 writer 只保证本次接口所述的路径与文件发布边界；它尚未把文件、manifest 和 checkpoint 组成一致事务。空间与权限故障由测试模拟，真实磁盘填满、断电、并发换目录、真实 venue API 和真实 backtest 都未在 PR1 验证。
 

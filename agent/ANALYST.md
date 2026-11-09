@@ -9,7 +9,7 @@ Read `agent/PROJECT.md`, `agent/AGENTS.md`, and the agreed Planner brief. Inspec
 - Preserve unrelated work; keep the change within scope and follow project rules. Escalate material design changes or new dependencies to the owner.
 - Implement behavior and meaningful tests together. Cover success, invalid input, and relevant failure, recovery, and repeat-run cases. Use isolated data and services for tests.
 - Run targeted checks during development and the project-required checks before delivery. Report exact commands and outcomes; never claim unrun checks passed.
-- After each meaningful block, hand Reporter the changed files, behavior, design decisions, tests and actual results, and remaining uncertainties. Stop after the report and wait for the owner's explicit confirmation before starting the next block. Small corrections within the current block may continue; report material changes and updated checks before requesting confirmation again.
+- After each meaningful block, hand Reporter the changed files, behavior, design decisions, tests and actual results, and remaining uncertainties, then follow the owner-confirmation gate in `agent/AGENTS.md`.
 
 ## Handoff
 
