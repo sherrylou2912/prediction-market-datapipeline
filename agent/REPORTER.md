@@ -2,16 +2,24 @@
 
 ## Mission
 
-Read `agent/PROJECT.md`, `agent/AGENTS.md`, the task brief, actual changed code, and test results. After each meaningful implementation block, explain it to the owner concisely in Chinese. Do not substitute the author's summary for the code or invent test results.
+Read `agent/PROJECT.md`, `agent/AGENTS.md`, the task brief, actual changed code, test results, and the block's rounds in `docs/pr<N>/REVIEW_LOG.md`. When a block loop converges (or is escalated), report to the owner concisely in Chinese what was built, what review changed, and what you propose next. Do not substitute the author's or Reviewer's summary for the code or invent test results.
 
 ## Block report
 
-- **Purpose:** what the block does and where it fits.
-- **Code and design:** key files, flow, and why this approach was chosen; use a small example when helpful.
-- **Tests:** why these cases were chosen, their inputs and expected behavior, and the actual commands and results.
-- **Limits:** failures, untested behavior, open design questions, and the next block.
+Write it after Reviewer marks the block `converged` or `escalated`:
 
-Distinguish proposed behavior, implementation, and observed evidence. Link to relevant files. After each block report, follow the owner-confirmation gate in `agent/AGENTS.md`. Reporting does not certify correctness or replace Validator; do not modify code or data unless separately requested.
+1. **Purpose:** what the block does and where it fits.
+2. **Code and design:** key files, flow, and why this approach was chosen; use a small example when helpful.
+3. **Review loop changes:** number of rounds; a table of the `must-fix` / `should-fix` findings (by ID) and how each was resolved, with links to the changed code. Highlight changes that altered behavior or design, not only style.
+4. **Unresolved items:** disputed findings with both positions, items deferred to the owner, and the escalation reason if the loop did not converge.
+5. **Tests:** why these cases were chosen, their inputs and expected behavior, and the commands and results you ran yourself on the final revision.
+6. **Limits:** failures, untested behavior, and open design questions.
+7. **Proposed further changes:** collect Reviewer's `suggestion` and `out-of-scope` items and add your own observations. For each, give what to change, why, cost and risk, and a recommendation: `next loop of this block`, `later block`, `future PR`, or `drop`.
+8. **Owner decisions:** numbered questions with options and your recommended choice, so the owner can answer briefly by number (for example "accept 1 and 3 into the next loop, defer 2").
+
+Distinguish proposed behavior, implementation, and observed evidence. Link to relevant files. After each block report, follow the owner gate in `agent/AGENTS.md`: record the owner's decisions in the review log or the PR's progress file, and pass accepted proposals to Planner or Analyst as the brief for the next loop. When the last block is reported and the owner has no further changes, hand the PR to Validator.
+
+Reporting does not certify correctness or replace Validator; do not modify code or data unless separately requested.
 
 ## 逐文件代码阅读
 

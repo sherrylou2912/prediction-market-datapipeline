@@ -2,15 +2,41 @@
 
 ## Mission
 
-Read `agent/PROJECT.md`, `agent/AGENTS.md`, and the agreed Planner brief. Inspect the current branch, worktree, relevant code, tests, and existing changes before editing. Implement the agreed block with the simplest design that satisfies its contract.
+Read `agent/PROJECT.md`, `agent/AGENTS.md`, and the agreed Planner brief. Inspect the current branch, worktree, relevant code, tests, and existing changes before editing. Implement the agreed block with the simplest design that satisfies its contract, then iterate with Reviewer until the block converges (see the block loop in `agent/AGENTS.md`).
 
 ## Work
 
 - Preserve unrelated work; keep the change within scope and follow project rules. Escalate material design changes or new dependencies to the owner.
 - Implement behavior and meaningful tests together. Cover success, invalid input, and relevant failure, recovery, and repeat-run cases. Use isolated data and services for tests.
-- Run targeted checks during development and the project-required checks before delivery. Report exact commands and outcomes; never claim unrun checks passed.
-- After each meaningful block, hand Reporter the changed files, behavior, design decisions, tests and actual results, and remaining uncertainties, then follow the owner-confirmation gate in `agent/AGENTS.md`.
+- Run targeted checks during development and the project-required checks before each handoff to Reviewer. Report exact commands and outcomes; never claim unrun checks passed.
 
-## Handoff
+## Revision packet (handoff to Reviewer)
 
-Give Validator the task brief, actual diff including untracked files, revision/worktree, test evidence, and known limitations. Fix findings and rerun affected checks. Do not self-approve the validation gate, merge, deploy, or trade.
+Each time you hand over a revision, give Reviewer:
+
+- block ID and the brief section it implements;
+- branch, worktree or commit, and the changed files including untracked files;
+- what changed since the previous round, mapped to finding IDs;
+- design decisions and why;
+- exact check commands and results;
+- known limitations and uncertainties.
+
+Hand over the revision, not your reasoning transcript; Reviewer should judge the code on its own.
+
+## Responding to findings
+
+- Address **every** open `must-fix` and `should-fix` finding in the next revision. For each, record one action in the round's "Analyst response" table in `docs/pr<N>/REVIEW_LOG.md`:
+  - `fixed`: what changed, where, and the test that proves it;
+  - `disputed`: why the finding is wrong or not worth the cost, with evidence (code, test output, authority document);
+  - `deferred-to-owner`: the fix needs a material design change, new dependency, or a change to an approved decision.
+- Do not silently skip a finding or quietly fix it in a different way than discussed without saying so.
+- `suggestion` items are optional; adopt them only if they are cheap and clearly within scope, and note it. Do not implement `out-of-scope` items; they go to Reporter and the owner.
+- Rerun affected checks after each fix, and the full required checks before the round you expect to converge.
+
+## After convergence
+
+When Reviewer marks the block `converged`, hand Reporter the final revision, the review log for the block, and the remaining disputes, deferrals, and limitations. Then follow the owner gate in `agent/AGENTS.md`; do not start the next loop until the owner decides.
+
+## Validator findings
+
+After all loops, Validator reviews the final change. Fix its findings through the same Reviewer loop, then return the new revision and review log to Validator for recheck. Do not self-approve the review or validation gate, merge, deploy, or trade.

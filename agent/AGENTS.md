@@ -5,9 +5,58 @@ Project: prediction-market-datapipeline.
 ## Workflow and roles
 
 - Start each substantive PR or task by reading `agent/PROJECT.md`, this file, the request, and the relevant role guide. These are guidance files, not automatically running agents.
-- `PLANNER.md`: clarify goals and design with the owner; propose scope, blocks, and acceptance criteria. `ANALYST.md`: implement the agreed block. `REPORTER.md`: explain each completed block and its tests to the owner. `VALIDATOR.md`: independently find problems and verify their fixes.
-- Handoff: Planner defines meaningful blocks with the owner → Analyst implements one block → Reporter explains it → wait for the owner's explicit confirmation before the next block. Small corrections within the current block may proceed continuously; report material changes and updated checks before requesting confirmation again. Validator reviews critical gates and the final change without fixing issues. For small tasks one agent may perform multiple roles, but a separate review context is preferred for high-risk changes; it is not proof of independence. The owner decides material design changes and merge.
-- At each handoff identify the task, branch and worktree or commit, changed files, decisions, actual checks and results, failures, and unverified items. Do not treat planning, a report, or a green test as proof of production readiness.
+
+### Roles
+
+| Role | Guide | Responsibility | Modifies code? |
+| --- | --- | --- | --- |
+| Planner | `PLANNER.md` | Clarify goals and design with the owner; agree scope, blocks, and acceptance criteria. | No |
+| Analyst | `ANALYST.md` | Implement the agreed block; address review findings. | Yes |
+| Reviewer | `REVIEWER.md` | Review each Analyst revision inside the block loop; raise findings until none remain. | No |
+| Reporter | `REPORTER.md` | Report the converged block to the owner, including what review changed, and propose further changes. | No |
+| Validator | `VALIDATOR.md` | Independently validate the final change after all block loops finish. | No |
+
+### Process
+
+```text
+Planner + owner agree the brief and blocks
+  │
+  ├─► Block loop (repeat for each block)
+  │     ┌──────────────────────────────────────────────┐
+  │     │ 1. Analyst implements / revises the block     │
+  │     │ 2. Reviewer reviews the latest revision       │
+  │     │    ├─ open findings → back to step 1          │
+  │     │    └─ no open findings → converged            │
+  │     └──────────────────────────────────────────────┘
+  │     3. Reporter reports the block and proposes further changes
+  │     4. Owner decides: accept proposals into the next loop,
+  │        defer them, or proceed to the next block
+  │
+  └─► All blocks done → Validator validates the final change
+        ├─ changes required → Analyst fixes → Reviewer loop → Reporter → Validator rechecks
+        └─ ready for owner review → owner decides merge
+```
+
+1. **Plan.** Planner and the owner agree the task brief and a list of meaningful blocks (see `PLANNER.md`). The owner confirms the brief before implementation starts.
+2. **Implement.** Analyst implements one block and hands Reviewer a revision packet (see `ANALYST.md`).
+3. **Review.** Reviewer reviews the latest revision and records findings for the round (see `REVIEWER.md`). Analyst addresses every open finding — fix, or dispute with evidence — and hands over a new revision. Repeat steps 2–3.
+4. **Converge.** The block loop ends when Reviewer reports no open `must-fix` or `should-fix` findings on the latest revision and the required checks pass. `suggestion` and `out-of-scope` items do not block convergence; they pass to Reporter.
+5. **Report.** Reporter explains to the owner what the block does, what each review round changed, which disputes or deferrals remain, and proposes further changes for the next loop (see `REPORTER.md`).
+6. **Owner gate.** Wait for the owner's explicit decision before starting the next loop. Owner-accepted proposals become the brief for the next loop of the same block or are added to a later block; rejected or deferred ones are recorded with the reason.
+7. **Validate.** After the last block loop is reported and the owner has no further changes, Validator independently validates the whole change (see `VALIDATOR.md`). Findings return to Analyst and go through the Reviewer loop and a Reporter report again before Validator rechecks. Only `ready for owner review` ends the workflow; the owner decides merge.
+
+### Loop rules
+
+- **Review log.** Record every round in `docs/pr<N>/REVIEW_LOG.md` (create it on the first round of the PR and register it in `docs/README.md`). Each round lists the reviewed revision, findings with IDs and severity, Analyst's response, and the checks each side actually ran. Reporter and Validator read this log; it is the evidence of what the loop changed.
+- **Round limit.** If a block has not converged after 3 review rounds, or Analyst and Reviewer disagree on a finding after one exchange, stop the loop and escalate to the owner through Reporter with both positions. Do not loop indefinitely or let either role silently drop a finding.
+- **Scope.** Reviewer findings must concern the current block and brief. New features, redesigns, or later-PR work are marked `out-of-scope` and go to Reporter as proposals; Analyst does not implement them without the owner's decision.
+- **Material changes.** A finding that requires a material design change, a new dependency, or a change to an approved decision is escalated to the owner before Analyst implements it.
+- **Independence.** Run Reviewer and Validator in a context separate from Analyst (e.g., a fresh subagent or session) that receives the revision packet, not Analyst's reasoning. Validator should also be separate from Reviewer. For small tasks one agent may perform multiple roles, but say so explicitly in the report; a separate context is preferred for high-risk changes and is not proof of independence.
+- **Small tasks.** For trivial changes (typos, documentation-only wording) the owner may waive the review loop or the Validator gate; record the waiver in the report.
+
+### Handoff and evidence
+
+- At each handoff identify the task, branch and worktree or commit, changed files, decisions, actual checks and results, failures, and unverified items. Do not treat planning, a report, a converged review loop, or a green test as proof of production readiness.
 - Preserve existing work. Before a commit inspect staged changes; after a PR is opened, review the latest head and its checks. After merge, record the merged revision, verification, limitations, and handoff. Do not claim an unrun check passed or approve, merge, deploy, or trade without the owner's authorization.
 
 ## Authority and language

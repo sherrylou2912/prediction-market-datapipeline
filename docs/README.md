@@ -10,7 +10,7 @@
 | `agent/` | 项目权威总览和 agent 角色规则 |
 | `docs/` | 跨 PR 长期有效的文档：数据契约、负责人笔记 |
 | `docs/adr/` | 架构决策记录（ADR），已接受的 ADR 不改写，新决定写新 ADR |
-| `docs/pr<N>/` | 某个 PR 专属的规则、计划和代码阅读进度；`archive/` 放被取代的历史文档 |
+| `docs/pr<N>/` | 某个 PR 专属的规则、计划、代码阅读进度和审查记录（`REVIEW_LOG.md`）；`archive/` 放被取代的历史文档 |
 | `docs/legacy/` | 旧分析流程的文档 |
 | `src/config/` | 配置模块自带的使用、开发和演进文档 |
 
@@ -33,9 +33,10 @@
 | [`agent/PROJECT.md`](../agent/PROJECT.md) | v1 架构、数据布局、执行计划；文档冲突时以它为准 |
 | [`agent/AGENTS.md`](../agent/AGENTS.md) | 共享工作流、负责人确认关口、硬性规则和约定 |
 | [`agent/PLANNER.md`](../agent/PLANNER.md) | Planner：与负责人讨论设计和范围 |
-| [`agent/ANALYST.md`](../agent/ANALYST.md) | Analyst：实施确认过的代码块 |
-| [`agent/REPORTER.md`](../agent/REPORTER.md) | Reporter：讲解代码块和测试、逐文件代码阅读 |
-| [`agent/VALIDATOR.md`](../agent/VALIDATOR.md) | Validator：独立审查和验证 |
+| [`agent/ANALYST.md`](../agent/ANALYST.md) | Analyst：实施确认过的代码块，逐条处理 Reviewer 意见 |
+| [`agent/REVIEWER.md`](../agent/REVIEWER.md) | Reviewer：代码块循环内逐轮审查，直到没有阻塞性意见 |
+| [`agent/REPORTER.md`](../agent/REPORTER.md) | Reporter：报告代码块及审查带来的修改、提出后续修改建议、逐文件代码阅读 |
+| [`agent/VALIDATOR.md`](../agent/VALIDATOR.md) | Validator：所有循环结束后对整个 PR 的独立最终验证 |
 
 ### 长期文档
 

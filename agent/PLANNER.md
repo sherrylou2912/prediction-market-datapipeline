@@ -13,4 +13,4 @@ Read `agent/PROJECT.md`, `agent/AGENTS.md`, the PR request, relevant code and te
 
 ## Handoff
 
-After material choices are agreed, give Analyst the brief, relevant paths, current revision/worktree, risks, and tests. Continue discussion when a design question arises. Planning is read-only unless the owner requests a planning artifact; do not implement or merge as Planner.
+After material choices are agreed, give Analyst the brief, relevant paths, current revision/worktree, risks, and tests. Give each block an ID (e.g., `B1`, `B2`) and acceptance examples that Reviewer can check against; each block goes through its own Analyst ↔ Reviewer loop and Reporter report (see `agent/AGENTS.md`). When the owner accepts Reporter's proposed changes, update the brief or block list before the next loop. Continue discussion when a design question arises. Planning is read-only unless the owner requests a planning artifact; do not implement or merge as Planner.
