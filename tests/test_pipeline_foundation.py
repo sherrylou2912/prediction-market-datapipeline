@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-import re
+import shutil
 import subprocess
 import sys
 from dataclasses import replace
@@ -49,12 +49,14 @@ from src.data_schema.contracts import (
         ("config_dir", Path("/invalid\x00config"), "PIPELINE_CONFIG_DIR must not contain NUL"),
     ],
 )
-def test_direct_config_and_replace_reject_invalid_fields(
+def test_direct_config_and_reconstruction_reject_invalid_fields(
     tmp_path: Path, field: str, value: object, message: str
 ) -> None:
-    valid = PipelineConfig(tmp_path / "data", 0, "INFO", tmp_path / "config")
+    valid = PipelineConfig(
+        data_root=tmp_path / "data", min_free_gib=0, log_level="INFO", config_dir=tmp_path / "config"
+    )
     with pytest.raises(ConfigError, match=message):
-        replace(valid, **{field: value})
+        PipelineConfig(**{**valid.model_dump(), field: value})
     values = {
         "data_root": valid.data_root,
         "min_free_gib": valid.min_free_gib,
@@ -80,18 +82,16 @@ def test_direct_config_validates_and_normalizes_without_filesystem_probes(
         guard.setattr("src.config.models.pipeline.tempfile.TemporaryFile", unexpected_probe)
         guard.setattr(Path, "mkdir", unexpected_probe)
         guard.setattr(Path, "stat", unexpected_probe)
-        config = PipelineConfig(data_root, 0, " debug ", config_dir)
+        config = PipelineConfig(data_root=data_root, min_free_gib=0, log_level=" debug ", config_dir=config_dir)
         assert config.data_root == data_root
         assert config.config_dir == config_dir
         assert config.log_level == "DEBUG"
-        assert replace(config, log_level=" warning ").log_level == "WARNING"
+        assert PipelineConfig(**{**config.model_dump(), "log_level": " warning "}).log_level == "WARNING"
     assert not data_root.exists()
     assert not config_dir.exists()
 
 
-def test_explicit_environment_isolated_from_default_dotenv(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_explicit_environment_isolated_from_default_dotenv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_dir = tmp_path / "defaults"
     config_dir.mkdir()
     (config_dir / "storage.json").write_text('{"min_free_gib": 3}', encoding="utf-8")
@@ -138,7 +138,7 @@ def test_load_rejects_nul_config_directory_before_reading_defaults(
     def unexpected_load(*args: object, **kwargs: object) -> None:
         pytest.fail("A config directory containing NUL must be rejected before reading defaults")
 
-    monkeypatch.setattr("src.config.models.pipeline.load_json_setting", unexpected_load)
+    monkeypatch.setattr("src.config.models.pipeline.load_json_object", unexpected_load)
     invalid = tmp_path / "invalid\x00config"
     with pytest.raises(ConfigError, match="PIPELINE_CONFIG_DIR must not contain NUL"):
         PipelineConfig.load(config_dir=invalid, environ={"DATA_ROOT": str(tmp_path)})
@@ -155,8 +155,8 @@ def test_load_rejects_non_path_config_directory_before_reading_defaults(
     def unexpected_load(*args: object, **kwargs: object) -> None:
         pytest.fail("An invalid config directory must be rejected before reading defaults")
 
-    monkeypatch.setattr("src.config.models.pipeline.load_json_setting", unexpected_load)
-    with pytest.raises(ConfigError, match="PIPELINE_CONFIG_DIR must be an absolute path"):
+    monkeypatch.setattr("src.config.models.pipeline.load_json_object", unexpected_load)
+    with pytest.raises(ConfigError, match="PIPELINE_CONFIG_DIR must be an absolute Path"):
         PipelineConfig.load(config_dir=invalid, environ={"DATA_ROOT": str(tmp_path)})
 
 
@@ -164,15 +164,15 @@ def test_config_requires_absolute_data_root_and_reports_unwritable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with pytest.raises(ConfigError, match="DATA_ROOT is required"):
-        PipelineConfig.from_env({})
-    with pytest.raises(ConfigError, match="absolute path"):
-        PipelineConfig.from_env({"DATA_ROOT": "relative/data"})
+        PipelineConfig.load(environ={})
+    with pytest.raises(ConfigError, match="absolute Path"):
+        PipelineConfig.load(environ={"DATA_ROOT": "relative/data"})
 
     def deny_write(**kwargs: object) -> None:
         raise PermissionError("test denial")
 
     monkeypatch.setattr("src.config.models.pipeline.tempfile.TemporaryFile", deny_write)
-    config = PipelineConfig.from_env({"DATA_ROOT": str(tmp_path), "DATA_MIN_FREE_GIB": "0"})
+    config = PipelineConfig.load(environ={"DATA_ROOT": str(tmp_path), "DATA_MIN_FREE_GIB": "0"})
     assert config.validate_for_read() == tmp_path
     with pytest.raises(ConfigError, match="DATA_ROOT is not writable.*test denial"):
         config.validate_for_write()
@@ -181,8 +181,8 @@ def test_config_requires_absolute_data_root_and_reports_unwritable(
 def test_config_checks_disk_space_and_environment_overrides(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     disk = type("Disk", (), {"free": 3 * 1024**3})()
     monkeypatch.setattr("src.config.models.pipeline.shutil.disk_usage", lambda path: disk)
-    config = PipelineConfig.from_env(
-        {"DATA_ROOT": str(tmp_path), "DATA_MIN_FREE_GIB": "4", "PIPELINE_LOG_LEVEL": "debug"}
+    config = PipelineConfig.load(
+        environ={"DATA_ROOT": str(tmp_path), "DATA_MIN_FREE_GIB": "4", "PIPELINE_LOG_LEVEL": "debug"}
     )
     assert config.config_dir == Path(__file__).parents[1] / "src" / "config" / "defaults"
     assert config.log_level == "DEBUG"
@@ -190,10 +190,11 @@ def test_config_checks_disk_space_and_environment_overrides(tmp_path: Path, monk
     with pytest.raises(ConfigError, match="DATA_MIN_FREE_GIB requires 4 GiB"):
         config.validate_for_write()
     assert (
-        PipelineConfig.from_env({"DATA_ROOT": str(tmp_path), "DATA_MIN_FREE_GIB": "0"}).validate_for_write() == tmp_path
+        PipelineConfig.load(environ={"DATA_ROOT": str(tmp_path), "DATA_MIN_FREE_GIB": "0"}).validate_for_write()
+        == tmp_path
     )
     with pytest.raises(ConfigError, match="nonnegative integer"):
-        PipelineConfig.from_env({"DATA_ROOT": str(tmp_path), "DATA_MIN_FREE_GIB": "-1"})
+        PipelineConfig.load(environ={"DATA_ROOT": str(tmp_path), "DATA_MIN_FREE_GIB": "-1"})
 
 
 def test_read_checks_do_not_probe_write_capacity_or_create_directories(
@@ -201,7 +202,7 @@ def test_read_checks_do_not_probe_write_capacity_or_create_directories(
 ) -> None:
     root = tmp_path / "existing"
     root.mkdir()
-    config = PipelineConfig.from_env({"DATA_ROOT": str(root), "DATA_MIN_FREE_GIB": "200"})
+    config = PipelineConfig.load(environ={"DATA_ROOT": str(root), "DATA_MIN_FREE_GIB": "200"})
 
     def unexpected_probe(*args: object, **kwargs: object) -> None:
         pytest.fail("A read-only check must not probe write capacity")
@@ -215,7 +216,7 @@ def test_read_checks_do_not_probe_write_capacity_or_create_directories(
 
 def test_read_check_requires_existing_readable_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = tmp_path / "missing"
-    config = PipelineConfig.from_env({"DATA_ROOT": str(root)})
+    config = PipelineConfig.load(environ={"DATA_ROOT": str(root)})
     with pytest.raises(ConfigError, match="does not exist for a read-only job"):
         config.validate_for_read()
     assert not root.exists()
@@ -232,7 +233,7 @@ def test_read_check_requires_existing_readable_directory(tmp_path: Path, monkeyp
 
 def test_write_preflight_creates_root_before_layout(tmp_path: Path) -> None:
     root = tmp_path / "new" / "data"
-    config = PipelineConfig.from_env({"DATA_ROOT": str(root), "DATA_MIN_FREE_GIB": "0"})
+    config = PipelineConfig.load(environ={"DATA_ROOT": str(root), "DATA_MIN_FREE_GIB": "0"})
     assert not root.exists()
     layout = DataLayout.create(config.validate_for_write())
     assert layout.root == root
@@ -245,7 +246,7 @@ def test_configured_root_rejects_file_ancestor_before_write_probe(
     non_directory = tmp_path / "file"
     non_directory.write_text("not a directory", encoding="utf-8")
     root = non_directory / "nested" / "data"
-    config = PipelineConfig.from_env({"DATA_ROOT": str(root), "DATA_MIN_FREE_GIB": "0"})
+    config = PipelineConfig.load(environ={"DATA_ROOT": str(root), "DATA_MIN_FREE_GIB": "0"})
 
     def unexpected_disk_probe(path: Path) -> None:
         pytest.fail("Invalid path must be rejected before checking disk space")
@@ -306,10 +307,10 @@ def test_config_files_reject_malformed_or_unexpected_values(tmp_path: Path) -> N
     with pytest.raises(ConfigError, match="Cannot read configuration file"):
         PipelineConfig.load(config_dir=config_dir, environ=values)
     storage.write_text('{"min_free_gib": true}', encoding="utf-8")
-    with pytest.raises(ConfigError, match="must be int"):
+    with pytest.raises(ConfigError, match="nonnegative integer"):
         PipelineConfig.load(config_dir=config_dir, environ=values)
     storage.write_text('{"min_free_gib": 2, "unknown": 1}', encoding="utf-8")
-    with pytest.raises(ConfigError, match="only the"):
+    with pytest.raises(ConfigError, match="unknown"):
         PipelineConfig.load(config_dir=config_dir, environ=values)
     storage.write_text('{"min_free_gib": 2}', encoding="utf-8")
     runtime.write_text('{"log_level": "TRACE"}', encoding="utf-8")
@@ -328,22 +329,25 @@ def test_config_directory_environment_override(tmp_path: Path) -> None:
     assert loaded.config_dir == directory
     assert loaded.min_free_gib == 7
     assert loaded.log_level == "ERROR"
-    with pytest.raises(ConfigError, match="PIPELINE_CONFIG_DIR must be an absolute path"):
+    with pytest.raises(ConfigError, match="PIPELINE_CONFIG_DIR must be an absolute Path"):
         PipelineConfig.load(environ={"DATA_ROOT": str(tmp_path), "PIPELINE_CONFIG_DIR": "relative/config"})
 
 
 def test_layout_creates_layers_and_writer_enforces_scope(tmp_path: Path) -> None:
     layout = DataLayout.create(tmp_path)
-    assert {entry.name for entry in tmp_path.iterdir()} == {role.value for role in WriterRole}
+    assert {entry.name for entry in tmp_path.iterdir()} == {role.value for role in WriterRole} | {
+        "recovery",
+        ".writer.lock",
+    }
     collector = layout.writer(WriterRole.COLLECTOR)
-    target = collector.write_new("bronze/mock/trades/part-1.jsonl", b'{"trade": 1}\n')
+    target = collector.write_new("bronze/mock/trades/run-1/part-1.jsonl", b'{"trade": 1}\n', receipt_id="run-1")
     assert target.read_bytes() == b'{"trade": 1}\n'
 
     for wrong_path in ("silver/part-1.parquet", "../silver/part-1.parquet", "/tmp/part-1.parquet"):
         with pytest.raises(WriteBoundaryError):
             collector.write_new(wrong_path, b"data")
     with pytest.raises(WriteBoundaryError, match="replace"):
-        collector.write_new("bronze/mock/trades/part-1.jsonl", b"replacement")
+        collector.write_new("bronze/mock/trades/run-1/part-1.jsonl", b"replacement", receipt_id="run-1")
     with pytest.raises(TypeError):
         layout.writer("bronze")  # type: ignore[arg-type]
     assert not list((tmp_path / "silver").iterdir())
@@ -357,7 +361,7 @@ def test_writer_rejects_symlink_escape(tmp_path: Path) -> None:
     outside.mkdir()
     (layout.root / "bronze" / "escape").symlink_to(outside, target_is_directory=True)
     with pytest.raises(WriteBoundaryError, match="symbolic link"):
-        layout.writer(WriterRole.COLLECTOR).write_new("bronze/escape/nested/file", b"data")
+        layout.writer(WriterRole.COLLECTOR).write_new("bronze/escape/nested/file", b"data", receipt_id="nested")
     assert not list(outside.iterdir())
 
 
@@ -371,23 +375,23 @@ def test_layout_rejects_symlinked_layer(tmp_path: Path) -> None:
         DataLayout.create(root)
 
 
-def test_writer_cleans_temporary_file_on_publish_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_writer_preserves_temporary_file_on_publish_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     layout = DataLayout.create(tmp_path)
 
-    def deny_link(source: str, target: Path) -> None:
+    def deny_link(source: str, target: Path, **kwargs: object) -> None:
         raise OSError("test publication failure")
 
     monkeypatch.setattr("src.data_io.layout.os.link", deny_link)
-    with pytest.raises(OSError, match="test publication failure"):
-        layout.writer(WriterRole.COLLECTOR).write_new("bronze/failure.bin", b"payload")
-    assert not list((tmp_path / "bronze").iterdir())
+    with pytest.raises(WriteBoundaryError, match="test publication failure"):
+        layout.writer(WriterRole.COLLECTOR).write_new("bronze/run-1/failure.bin", b"payload", receipt_id="run-1")
+    assert [p.read_bytes() for p in (tmp_path / "recovery" / "conflicts").rglob("*.bin") if p.is_file()] == [b"payload"]
 
 
 @pytest.mark.parametrize("role", list(WriterRole))
 def test_each_writer_is_bound_to_its_layer(tmp_path: Path, role: WriterRole) -> None:
     layout = DataLayout.create(tmp_path)
     writer = layout.writer(role)
-    assert writer.write_new(f"{role.value}/proof.bin", b"ok").read_bytes() == b"ok"
+    assert writer.write_new(f"{role.value}/run-1/proof.bin", b"ok", receipt_id="run-1").read_bytes() == b"ok"
     other = next(candidate for candidate in WriterRole if candidate != role)
     with pytest.raises(WriteBoundaryError):
         writer.write_new(f"{other.value}/wrong.bin", b"bad")
@@ -395,13 +399,14 @@ def test_each_writer_is_bound_to_its_layer(tmp_path: Path, role: WriterRole) -> 
 
 
 def test_schema_document_matches_code_registry() -> None:
+    from scripts.generate_schema_docs import regenerate
+
     document = (Path(__file__).parents[1] / "docs" / "SCHEMAS.md").read_text(encoding="utf-8")
-    match = re.search(r"```json\n(.*?)\n```", document, flags=re.DOTALL)
-    assert match is not None
-    declared = json.loads(match.group(1))
-    assert declared == SCHEMA_REGISTRY
+    registry_path = Path(__file__).parents[1] / "src" / "data_schema" / "schema_registry.json"
+    declared = json.loads(registry_path.read_text(encoding="utf-8"))
+    assert regenerate(document, declared) == document, "Run python scripts/generate_schema_docs.py"
     assert declared["version"] == SCHEMA_VERSION
-    assert len(declared["datasets"]) == 13
+    assert len(declared["datasets"]) == 14
     with pytest.raises(ContractError, match="Unknown dataset"):
         get_contract("silver.unknown")
     for dataset, contract in declared["datasets"].items():
@@ -409,7 +414,7 @@ def test_schema_document_matches_code_registry() -> None:
         assert schema.names == list(contract["fields"])
         assert schema.metadata[b"schema_version"].decode() == SCHEMA_VERSION
         for field in schema:
-            assert field.nullable == contract["fields"][field.name].endswith("?")
+            assert field.nullable == contract["fields"][field.name]["type"].endswith("?")
             assert isinstance(field.type, pa.DataType)
 
 
@@ -420,6 +425,7 @@ def test_silver_outcomes_accepts_text_label() -> None:
         "outcome_id": "yes",
         "market_id": "mock-1",
         "label": "YES",
+        "description": None,
         "observed_at": observed_at,
         "bronze_run_id": "mock-run",
         "bronze_record_index": 1,
@@ -440,9 +446,30 @@ def test_every_dataset_accepts_a_populated_contract_row(dataset: str) -> None:
         "utc_datetime": observed_at,
         "decimal": Decimal("0.5"),
         "json": "{}",
+        "binary": b"example",
     }
-    row = {field: examples[spec.rstrip("?")] for field, spec in SCHEMA_REGISTRY["datasets"][dataset]["fields"].items()}
+    row = {
+        field: examples[spec["type"].rstrip("?")]
+        for field, spec in SCHEMA_REGISTRY["datasets"][dataset]["fields"].items()
+    }
     row["schema_version"] = SCHEMA_VERSION
+    if dataset == "bronze.raw":
+        row["raw_bytes"] = None
+    if "status" in row:
+        row["status"] = "open"
+    if "side" in row:
+        row["side"] = "bid"
+    if "taker_side" in row:
+        row["taker_side"] = "buy"
+    if "trade_data_status" in row:
+        row["trade_data_status"] = "observed"
+    if dataset == "gold.market_1s":
+        row["spread"] = Decimal("0")
+        row["as_of"] = observed_at + timedelta(seconds=1)
+    if dataset == "gold.market_1m":
+        row["as_of"] = observed_at + timedelta(minutes=1)
+    if "label_available_at" in row:
+        row["label_available_at"] = observed_at + timedelta(seconds=1)
     if "day" in row:
         row["day"] = "2024-01-01"
     if "source_manifest_ids" in row:
@@ -470,6 +497,7 @@ def test_bronze_and_silver_validation_rejects_bad_rows() -> None:
         "protocol_version": None,
         "schema_version": SCHEMA_VERSION,
         "raw_payload": '{"id":"mock-1"}',
+        "raw_bytes": None,
     }
     validate_record("bronze.raw", raw)
     with pytest.raises(ContractError, match="valid JSON"):
@@ -484,7 +512,15 @@ def test_bronze_and_silver_validation_rejects_bad_rows() -> None:
         validate_record("bronze.raw", {**raw, "record_index": -1})
 
     adapter = MockVenueAdapter()
-    trade = adapter.normalize_trade(adapter.backfill_trades(when, when + timedelta(days=1)).items[0])
+    trade_payload = adapter.backfill_trades(when, when + timedelta(days=1)).items[0]
+    trade = adapter.normalize_trade(
+        {
+            **raw,
+            "raw_payload": json.dumps(trade_payload),
+            "received_at": when + timedelta(hours=13),
+            "ingested_at": when + timedelta(hours=13),
+        }
+    )
     with pytest.raises(ContractError, match="between 0 and 1"):
         validate_record("silver.trades", {**trade, "price": Decimal("1.1")})
     with pytest.raises(ContractError, match="finite Decimal"):
@@ -515,7 +551,7 @@ def test_gold_one_second_requires_aligned_utc_time() -> None:
         "receive_latency_ms": None,
         "gap": False,
         "recovery": False,
-        "as_of": when,
+        "as_of": when + timedelta(seconds=1),
         "source_manifest_ids": '["manifest-1"]',
         "schema_version": SCHEMA_VERSION,
     }
@@ -535,24 +571,24 @@ def test_training_features_obey_point_in_time_contract() -> None:
         "market_id": "mock-1",
         "observation_time": when,
         "features": '{"volume": 2}',
-        "max_feature_event_time": when + timedelta(seconds=1),
+        "max_feature_available_at": when + timedelta(seconds=1),
         "label": None,
         "label_available_at": None,
         "source_manifest_ids": '["manifest-1"]',
         "schema_version": SCHEMA_VERSION,
     }
-    with pytest.raises(ContractError, match="known by observation_time"):
+    with pytest.raises(ContractError, match="max_feature_available_at.*observation_time"):
         validate_record("gold.training_datasets", row)
-    with pytest.raises(ContractError, match="at least one manifest ID"):
+    with pytest.raises(ContractError, match="at least one nonempty manifest ID"):
         validate_record(
             "gold.training_datasets",
-            {**row, "max_feature_event_time": when, "source_manifest_ids": "[]"},
+            {**row, "max_feature_available_at": when, "source_manifest_ids": "[]"},
         )
-    validate_record("gold.training_datasets", {**row, "max_feature_event_time": when})
+    validate_record("gold.training_datasets", {**row, "max_feature_available_at": when})
     with pytest.raises(ContractError, match="gold.training_datasets.label must be between 0 and 1"):
         validate_record(
             "gold.training_datasets",
-            {**row, "max_feature_event_time": when, "label": Decimal("1.1")},
+            {**row, "max_feature_available_at": when, "label": Decimal("1.1")},
         )
 
 
@@ -561,49 +597,70 @@ def test_mock_adapter_discover_to_normalize_chain() -> None:
         VenueAdapter()
     adapter = MockVenueAdapter()
     assert isinstance(adapter, VenueAdapter)
-    assert len(adapter.metadata.capabilities) == 4
+    assert len(adapter.metadata.capabilities) == 7
     with pytest.raises(ValueError, match="rate limits"):
         replace(adapter.metadata, rate_limits={"requests_per_second": 0})
-    with pytest.raises(ValueError, match="eight"):
-        replace(adapter.metadata, validation_rules=())
+    with pytest.raises(ValueError, match="required"):
+        replace(adapter.metadata, precision={})
     discovered = adapter.discover_markets()
-    assert discovered.next_cursor is None
-    market = adapter.normalize_market(discovered.items[0])
+    assert discovered.next_cursor is not None
+    when = datetime(2024, 1, 1, 12, tzinfo=timezone.utc)
+
+    def envelope(payload: object, index: int) -> dict:
+        return {
+            "run_id": "mock-run",
+            "record_index": index,
+            "venue": "mock",
+            "source": "mock",
+            "message_type": "test",
+            "source_event_id": None,
+            "event_time": None,
+            "received_at": when,
+            "ingested_at": when,
+            "sequence": None,
+            "api_version": "1",
+            "protocol_version": None,
+            "schema_version": SCHEMA_VERSION,
+            "raw_payload": json.dumps(payload),
+            "raw_bytes": None,
+        }
+
+    market = adapter.normalize_market(envelope(discovered.items[0], 0))
     validate_record("silver.markets", market)
     assert market["market_id"] == "mock-1"
     assert pa.Table.from_pylist([market], schema=arrow_schema("silver.markets")).num_rows == 1
-
     start = datetime(2024, 1, 1, tzinfo=timezone.utc)
     end = start + timedelta(days=1)
     assert adapter.backfill_markets(start, end).items == discovered.items
-    trade = adapter.normalize_trade(adapter.backfill_trades(start, end).items[0])
+    trade = adapter.normalize_trade(envelope(adapter.backfill_trades(start, end).items[0], 1))
     assert trade["price"] == Decimal("0.65")
     assert pa.Table.from_pylist([trade], schema=arrow_schema("silver.trades")).num_rows == 1
-    assert adapter.fetch_settlements(start, end).items == ()
-    book = adapter.normalize_book_event(next(adapter.stream_market_data(["mock-1"])))
-    assert book["source_sequence"] == 1
-    validate_record("silver.book_deltas", book)
+    assert adapter.fetch_settlements(start, end).items
+    book = adapter.normalize_book_event(envelope(next(adapter.stream_market_data(["mock-1"])), 2))
+    assert book.dataset == "silver.book_deltas" and book.record["source_sequence"] == 1
+    validate_record(book.dataset, book.record)
 
 
 @pytest.mark.parametrize(
     "method_name",
     (
-        "discover_markets",
-        "backfill_markets",
-        "backfill_trades",
-        "fetch_settlements",
-        "stream_market_data",
-        "normalize_market",
-        "normalize_trade",
-        "normalize_book_event",
+        "metadata",
+        "_discover_markets",
+        "_backfill_markets",
+        "_backfill_trades",
+        "_fetch_settlements",
+        "_stream_market_data",
+        "_normalize_market",
+        "_normalize_trade",
+        "_normalize_book_event",
+        "_normalize_settlement",
+        "_normalize_event",
+        "_normalize_outcome",
+        "_normalize_market_state",
     ),
 )
 def test_adapter_missing_one_required_method_cannot_start(method_name: str) -> None:
-    incomplete = type(
-        f"Missing{method_name}",
-        (MockVenueAdapter,),
-        {method_name: getattr(VenueAdapter, method_name)},
-    )
+    incomplete = type(f"Missing{method_name}", (MockVenueAdapter,), {method_name: getattr(VenueAdapter, method_name)})
     with pytest.raises(TypeError, match=method_name):
         incomplete()
 
@@ -634,10 +691,23 @@ def test_pipeline_cli_checks_configuration_without_preparing_layout(
 
 
 def test_module_entry_point_runs_in_a_new_process(tmp_path: Path) -> None:
-    environment = {**os.environ, "DATA_ROOT": str(tmp_path), "DATA_MIN_FREE_GIB": "0"}
+    # The package copy has its own default .env location and cannot read the
+    # developer's real .env, even if that file has invalid or duplicate keys.
+    project = tmp_path / "isolated-project"
+    project.mkdir()
+    shutil.copytree(
+        Path(__file__).parents[1] / "src", project / "src", ignore=shutil.ignore_patterns("__pycache__", "*.pyc")
+    )
+    environment = {
+        **{key: value for key, value in os.environ.items() if key not in {"PYTHONPATH", "PYTHONHOME"}},
+        "DATA_ROOT": str(tmp_path),
+        "DATA_MIN_FREE_GIB": "0",
+        "PIPELINE_CONFIG_DIR": "",
+        "PIPELINE_LOG_LEVEL": "",
+    }
     result = subprocess.run(
         [sys.executable, "-m", "src", "check"],
-        cwd=Path(__file__).parents[1],
+        cwd=project,
         env=environment,
         capture_output=True,
         text=True,
@@ -646,3 +716,14 @@ def test_module_entry_point_runs_in_a_new_process(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert "pipeline configuration valid" in result.stdout
     assert not (tmp_path / "bronze").exists()
+    (project / ".env").write_text("DUP=first\nDUP=second\n", encoding="utf-8")
+    malformed = subprocess.run(
+        [sys.executable, "-m", "src", "check"],
+        cwd=project,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert malformed.returncode == 2
+    assert "Duplicate environment key" in malformed.stderr

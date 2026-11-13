@@ -26,7 +26,9 @@ src/config/
 ├── errors.py
 │   # 配置文件、引用、字段和 preflight 的异常类型。
 ├── loader.py
-│   # 读取 JSON、.env 和进程环境；不承担业务验证。
+│   # 读取 JSON、.env 和进程环境；拒绝重复 JSON 和 .env 键并隔离显式环境插值，不承担业务验证。
+├── validation.py
+│   # 共用的字段合法性约束与 pydantic 异常转换。
 ├── resolver.py
 │   # 在 profiles 出现后，展开 job/experiment 的显式引用并记录来源。
 ├── serialization.py
@@ -35,10 +37,8 @@ src/config/
 ├── models/
 │   ├── __init__.py
 │   │   # 导出公共配置类型。
-│   ├── common.py
-│   │   # TimeWindow、ConfigReference、ConfigVersion 等小型共享值对象。
 │   ├── pipeline.py
-│   │   # PipelineConfig：DATA_ROOT、空间门槛、日志和共享 preflight。
+│   │   # PipelineConfig：DATA_ROOT、空间门槛、日志和共享 preflight；macOS 外部卷及路径别名须确认挂载。
 │   ├── dataset.py
 │   │   # DatasetConfig/Ref：数据集身份、层、schema version 和分区引用。
 │   ├── venue.py
@@ -126,9 +126,9 @@ defaults + profiles + job/experiment + environment/CLI
 
 ## 强制规则
 
-1. `PipelineConfig` 只管理所有任务共享的运行环境；task 参数放入对应 task model。
+1. `PipelineConfig` 只管理所有任务共享的运行环境；只有它可被环境变量覆盖，task 参数放入对应 task model，从 JSON 或 CLI 获取。`.env` 仅存放敏感信息和机器级全局设置。
 2. 每种任务只有一个顶层 task config class；共享配置使用组合，不建立大型继承树。
-3. `loader.py` 只读原始来源；model 验证字段；resolver 只解析显式 profile 引用。
+3. `loader.py` 只读原始来源；model 用 pydantic 声明允许和必填字段、类型及合法性规则；可复用约束放在 `validation.py`；resolver 只解析显式 profile 引用。编写或修改相关配置代码前，开发者和 agent 必须先读本文件及 `README_FOR_DEVELOPER.md`。
 4. profile 引用保持一层，不允许任意深度继承或不透明 deep merge。
 5. 所有 profile、job 和 experiment JSON 包含 `config_version`；required value 必须显式，只有普遍安全的值才可进入 defaults。
 6. Quality policy 必须显式选择，不提供宽松的隐藏默认政策。

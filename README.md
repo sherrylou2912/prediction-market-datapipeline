@@ -36,64 +36,25 @@ uv run pytest tests/ -v
 
 Run the startup command after setting `DATA_ROOT` as described below. `uv sync --locked --group dev` creates or updates the local `.venv` from the committed lockfile and includes the test and lint tools. The `--locked` flag prevents an accidental lockfile update during installation. `.venv` is local and ignored by Git; do not edit installed packages inside it.
 
-**Where are the required library names?** Root [`pyproject.toml`](pyproject.toml) lists runtime libraries, including `pyarrow` and `python-dotenv`, in `[project].dependencies`. The same file lists `pytest` and `ruff` in `[dependency-groups].dev`. Root [`uv.lock`](uv.lock) records the resolved package versions and transitive dependencies. To change a requirement, edit `pyproject.toml`, regenerate `uv.lock` with `uv lock`, and commit both files together. PR 1 adds no libraries.
+**Where are the required library names?** Root [`pyproject.toml`](pyproject.toml) lists runtime libraries, including `pyarrow`, `python-dotenv`, and `pydantic`, in `[project].dependencies`. The same file lists `pytest` and `ruff` in `[dependency-groups].dev`. Root [`uv.lock`](uv.lock) records the resolved package versions and transitive dependencies. To change a requirement, edit `pyproject.toml`, regenerate `uv.lock` with `uv lock`, and commit both files together. PR 1 adds pydantic for configuration validation.
 
 Dependency versions are controlled, but wheel distribution is not configured: `pyproject.toml` has no build backend. Run commands from the repository root so Python can import `src` directly.
 
 ## Configure the pipeline
 
-1. Copy `.env.example` to `.env` and set `DATA_ROOT` to an absolute path on a volume intended for pipeline data. The local `.env` is ignored by Git. The CLI reads it automatically; an exported process environment variable overrides the same key in `.env`.
-2. Edit `src/config/defaults/storage.json` for the default minimum free space and `src/config/defaults/runtime.json` for the default log level. Both files are version controlled and contain no secrets.
-3. Run the configuration check. It validates the settings and data path without checking free space, testing write access, or creating directories. A missing `DATA_ROOT` directory is reported as pending creation, not as a configuration failure.
+Copy `.env.example` to `.env`, set `DATA_ROOT` to an absolute path on the intended data volume, then run the non-writing configuration check:
 
 ```bash
 cp .env.example .env
-# Edit .env and set DATA_ROOT before running this command.
+# Edit .env and set DATA_ROOT.
 uv run python -m src check
 ```
 
-The default capacity threshold is 200 GiB and applies only to jobs that will write data. Set `DATA_MIN_FREE_GIB=0` only in an isolated test environment. A low-space volume does not prevent the general check or a read-only job from running.
-
-### Checks performed by each entry point
-
-| Entry point | Checks | Side effects |
-| --- | --- | --- |
-| `python -m src check` | Configuration values and whether `DATA_ROOT` can be a directory. | None; a missing directory is reported but not created. |
-| `PipelineConfig.validate_for_read()` | Existing `DATA_ROOT` is readable. | None; does not check free space or write access. |
-| `PipelineConfig.validate_for_write()` | Free disk space, directory creation, and actual write access. | May create `DATA_ROOT`; the write job then calls `DataLayout.create()` to prepare the six layers. |
-
-Task entry points call the appropriate method automatically. PR 1 supplies these methods and the non-writing `check` command, but does not yet include a real read or write job.
-
-### Settings and precedence
-
-| Setting | Location and default | Purpose |
-| --- | --- | --- |
-| `DATA_ROOT` | Required in `.env` or process environment | Absolute data directory; never hardcoded in pipeline code. |
-| `PIPELINE_CONFIG_DIR` | Optional environment key; defaults to `src/config/defaults/` | Alternate absolute directory containing `storage.json` and `runtime.json`. |
-| `DATA_MIN_FREE_GIB` | Environment override of `src/config/defaults/storage.json`, default 200 | Minimum free disk space before a write-producing job. |
-| `PIPELINE_LOG_LEVEL` | Environment override of `src/config/defaults/runtime.json`, default `INFO` | Validated logging level for future jobs. |
-| `POLYGON_RPC`, `POLYMARKET_START_BLOCK` | `.env.example` | Existing legacy indexer settings. |
-| `KALSHI_API_KEY_ID`, `KALSHI_PRIVATE_KEY_PEM` | Blank in `.env.example` | Reserved for a later Kalshi adapter; unused by this PR. |
-| `POLYMARKET_API_KEY`, `POLYMARKET_API_SECRET`, `POLYMARKET_API_PASSPHRASE` | Blank in `.env.example` | Reserved for later authenticated Polymarket operations; unused by this PR. |
-| `DATABASE_URL` | Blank in `.env.example` | Reserved for a future PostgreSQL ledger; unused by PR 1. |
-
-Precedence is **process environment > local `.env` > version-controlled JSON default**. Empty override values fall back to JSON defaults where a default exists. `DATA_ROOT` has no fallback. Secrets are never copied into `PipelineConfig` or printed by the startup check. More details are in [src/config/README.md](src/config/README.md).
-
-### Startup errors
-
-| Message | Action |
-| --- | --- |
-| `DATA_ROOT is required` | Set `DATA_ROOT` in `.env` or export it. |
-| `DATA_ROOT must be an absolute path` | Replace a relative value with an absolute directory path. |
-| `DATA_ROOT does not exist for a read-only job` | Point the read job to an existing data directory. |
-| `DATA_ROOT is not readable` | Check read permission on the data directory. |
-| `DATA_ROOT is not writable` | For a write job, check ownership, permissions, and the parent directory. |
-| `DATA_MIN_FREE_GIB requires ...` | For a write job, use a volume with enough free space. Lower the threshold only for controlled tests. |
-| `Missing configuration file` or `Cannot read configuration file` | Restore valid `storage.json` and `runtime.json` in the selected config directory. |
+See the [configuration guide](src/config/README.md) for settings, precedence, preflight checks, and startup errors.
 
 ## Data layout and writer boundaries
 
-After a write job passes `validate_for_write()`, it calls `DataLayout.create()` to create `imports/`, `bronze/`, `silver/`, `gold/`, `quarantine/`, and `manifests/` under `DATA_ROOT`. The general `check` command does not create these directories. A writer is bound to one layer:
+After a write job passes `validate_for_write()`, it calls `DataLayout.create()` to create `imports/`, `bronze/`, `silver/`, `gold/`, `quarantine/`, `manifests/`, and `recovery/` under `DATA_ROOT`. A `.writer.lock` coordinates cooperating writers and recovery on one machine. The lock does not wait: if another writer (or another `DataLayout` in the same process) holds it, `DataLayout.create()` and each write fail immediately with `WriteBoundaryError` and leave data untouched; the caller decides whether to retry. While holding the lock, `DataLayout.create()` scans all six layers for abandoned partial files and re-checksums every file in `recovery/`, so initialization takes longer as data grows; waiting with a timeout and narrowing the scan are deferred to PR2 (owner decision 2026-11-13). The general `check` command does not create these directories. A writer is bound to one layer:
 
 | Writer role | Allowed directory |
 | --- | --- |
@@ -104,13 +65,19 @@ After a write job passes `validate_for_write()`, it calls `DataLayout.create()` 
 | `VALIDATOR` | `quarantine/` |
 | `REGISTRY` | `manifests/` |
 
-For example, a `COLLECTOR` writer accepts `bronze/source/file.jsonl` and rejects `silver/file.parquet`, absolute paths, parent traversal, symlink escapes, and replacement of existing files. It publishes a complete file after writing it to a temporary sibling. A writer call in PR 1 does not register a manifest or advance a checkpoint.
+A `COLLECTOR` write uses the receipt ID as the file's immediate parent directory, such as `bronze/source/run-1/file.jsonl`, and supplies the same `receipt_id`. Receipt IDs must match `[a-z0-9][a-z0-9_-]*`; invalid IDs are rejected rather than silently changed, preventing case or Unicode aliases. The writer rejects paths outside its layer, traversal, symlink escapes, and nested mounts on a different device. A byte-identical retry of the same receipt succeeds; conflicting data is retained in `recovery/` and raises an error. Recovery metadata references its expected `.bin` payload; a JSON record without that payload is an incomplete recovery, and layout initialization logs it for review. Initialization checks recovery metadata and matching payload checksums and stops on inconsistencies without overwriting evidence. Publication uses a temporary sibling and a hard link. A writer call in PR 1 does not register a manifest or advance a checkpoint.
+
+Directory preparation retries the parent-directory sync even when a prior attempt left the directory behind. Recovery rejects partial metadata that lacks a valid original modification time or does not mark integrity as unknown; rebuilt metadata for an orphaned payload retains unknown integrity without inventing the original modification time.
 
 ## Data contracts and adapter interface
 
-[Data Contracts v2](docs/SCHEMAS.md) defines the Bronze raw envelope, eight Silver datasets, and four Gold products. The JSON registry in `src/data_schema/schema_registry.json` is checked against that document in tests. `validate_record` enforces row shape, types, UTC timestamps, numeric bounds, JSON shape, and selected point-in-time rules. File-wide uniqueness, coverage, and source-specific quality checks belong to the later validation gate.
+[Data Contracts v7](docs/SCHEMAS.md) defines the Bronze raw envelope, eight Silver datasets, and five Gold products including `gold.market_1m`. Field tables are generated from the JSON registry in `src/data_schema/schema_registry.json` and checked by tests. `validate_record` enforces row shape, types, UTC timestamps, declared row rules, and the first point-in-time check. A later training and backtest check will also apply the configured information delay; that check is not yet implemented. File-wide uniqueness, coverage, and source-specific quality checks belong to the later validation gate.
 
-`VenueAdapter` declares eight operations and eight metadata areas. `MockVenueAdapter` uses only in-memory data and demonstrates market discovery and normalization, trade normalization, and book-event normalization without real API calls. Future venue adapters must implement that interface.
+Bronze records can represent a source without a venue or API version and retain either JSON text or original bytes, including malformed or non-UTF-8 content. These are record contracts, not a large-file importer or a persistence workflow; actual source-specific file handling and manifests remain future work. An ingestion timestamp earlier than receipt is kept in Bronze but prevents every `VenueAdapter` from normalizing the record until reviewed.
+
+`VenueAdapter` defines five collection operations, seven normalization operations, and nine metadata fields, including the venue and API/protocol identity used to check routing. Collection returns source records; the future orchestrator wraps and persists them as Bronze records before normalization. The mock uses in-memory data to demonstrate pagination, time filtering, provenance, all Silver normalizers, and explicitly identifies book snapshots and deltas. `NormalizationError` retains the evidence for future quarantine, while unsupported capabilities and adapter routing errors raise separate errors. There are no real API calls or quarantine job in PR 1.
+
+Invalid Bronze envelopes and source JSON exceeding the parser's nesting limit are reported as normalization errors. When evidence can be copied, `evidence_is_snapshot` is true and `raw_record` is an independent copy; if copying fails or the mapping or value type has unverified access or copy behavior (including custom subclasses), it is false and `raw_record` retains the input reference, which can change later. A read-only mapping proxy is copied, and therefore normalized like a plain `dict`, only when its underlying mapping can be confirmed as a built-in dictionary; otherwise it takes the reference path (owner decision 2026-11-13, reversing V1-S4). The confirmation uses CPython's `gc.get_referents`; on other Python implementations a valid proxy safely falls back to the reference path and is not normalized. Evidence is copied before routing, so a misrouted envelope that cannot be copied is reported as a normalization error rather than a routing error. `evidence_copy_error_type` identifies the copy failure type. The exception alone does not persist that evidence or place it in quarantine.
 
 ## Run checks
 
@@ -160,4 +127,4 @@ make package
 - Adegbenro, A. (2026). _What Prediction Markets Can See: Market Formation, Settlement Legibility, and the Geography of Tradable Uncertainty in Africa and Latin America_. arXiv. https://arxiv.org/abs/2606.17503
 - Mauboussin, M. J., Callahan, D. (2026). _The Wisdom of Crowds in Markets: Crowd Behavior in Prediction, Betting, and Stock Markets_. Morgan Stanley. https://www.morganstanley.com/content/dam/im/assets/publication/thought-leadership/consilient-observer/article_thewisdomofcrowds_ltr.pdf?1786370649511
 
-If you have used or plan to use this dataset in your research, please reach out via [email](mailto:jonathan@jbecker.dev) or [Twitter](https://x.com/BeckerrJon) -- i'd love to hear about what you're using the data for! Additionally, feel free to open a PR and update this section with a link to your paper.
+The citations and the dataset referenced above come from the upstream project; this repository retains their attribution and license.

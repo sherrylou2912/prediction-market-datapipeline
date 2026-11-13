@@ -41,71 +41,154 @@ PR1 改动的代码和文档已全部读完（2026-11-09）。
 
 ## 2. Analyst 实施清单（按依赖顺序）
 
-按顺序实施；每完成一块，由 Reporter 讲解并等负责人确认后再进行下一块（`agent/AGENTS.md` 工作流）。每块都要更新受影响的测试和文档，并运行 `uv run ruff check .`、`uv run ruff format --check .`、`uv run pytest tests/ -v`。
+负责人于 2026-11-09 授权连续实施清单，无需逐块等待确认；实施时记录变更与决策，完成后由负责人重新 review。按依赖关系安排工作，每块更新受影响的测试和文档；交付前运行 `uv run ruff check .`、`uv run ruff format --check .`、`uv run pytest tests/ -v`。
 
 **第 0 块：恢复检查通过**
 
-- [ ] 修复 lint 和格式，保留两条中文笔记（§4.13 第 1 条）。
+- [x] 修复 lint 和格式，保留两条中文笔记（§4.13 第 1 条）。
 
 **第 1 块：配置**（其他块依赖它的 pydantic 写法、`validation.py` 和日志）
 
-- [ ] 新增 pydantic 依赖；`PipelineConfig` 改用 pydantic，建立 `src/config/validation.py`，`ValidationError` 统一转为 `ConfigError`（§4.1）。
-- [ ] loader 收窄为通用 JSON 对象读取，字段和类型校验移入 model（§4.1）。
-- [ ] 删除 `from_env()`（§4.4）。
-- [ ] 写检查失败时只清理本次新建的目录（§4.3）。
-- [ ] 补齐配置加载与 preflight 测试 1–7（§4.2）。
-- [ ] 更新 `src/config/` 三份文档（§4.1 “文档”）。
+- [x] 新增 pydantic 依赖；`PipelineConfig` 改用 pydantic，建立 `src/config/validation.py`，`ValidationError` 统一转为 `ConfigError`（§4.1）。
+- [x] loader 收窄为通用 JSON 对象读取，字段和类型校验移入 model（§4.1）。
+- [x] 删除 `from_env()`（§4.4）。
+- [x] 写检查失败时只清理本次新建的目录（§4.3）。
+- [x] 补齐配置加载与 preflight 测试 1–7（§4.2）。
+- [x] 更新 `src/config/` 三份文档（§4.1 “文档”）。
 
 **第 2 块：CLI 与日志**
 
-- [ ] 按 `log_level` 配置结构化 JSON 日志（§4.6）。
-- [ ] `src/cli.py` 改为统一命令入口；未知命令返回退出码（§4.5）。
-- [ ] 修改 L636 测试的环境隔离，补 CLI 测试 8–9（§4.2）。
+- [x] 按 `log_level` 配置结构化 JSON 日志（§4.6）。
+- [x] `src/cli.py` 改为统一命令入口；未知命令返回退出码（§4.5）。
+- [x] 修改 L636 测试的环境隔离，补 CLI 测试 8–9（§4.2）。
 
 **第 3 块：写入层**（依赖第 2 块的日志）
 
-- [ ] 统一异常为 `WriteBoundaryError`；发布后父目录 `fsync`（§4.7 第 2、3 条）。
-- [ ] 外接硬盘：硬链接检测、“卷未挂载”报错（§4.7 第 1 条）。
-- [ ] `recovery/` 区、锁文件、冲突与残留 partial 处理；Bronze 路径包含接收身份（§4.7 第 4 条）。
-- [ ] 补充 layout 测试（§4.7 第 4、5 条）。
+- [x] 统一异常为 `WriteBoundaryError`；发布后父目录 `fsync`（§4.7 第 2、3 条）。
+- [x] 外接硬盘：硬链接检测、“卷未挂载”报错（§4.7 第 1 条）。
+- [x] `recovery/` 区、锁文件、冲突与残留 partial 处理；Bronze 路径包含接收身份（§4.7 第 4 条）。
+- [x] 补充 layout 测试（§4.7 第 4、5 条）。
 
 **第 4 块：数据契约**
 
-- [ ] 设计规则的 JSON 声明格式，把 schema、范围规则、行内规则迁入 JSON；`contracts.py` 只读取并执行（§4.8 第 2 条）。
-- [ ] 每个字段加 `description`；registry 自检（§4.8 第 5 条、§4.10 第 3 条）。
-- [ ] `get_contract()` 只读；UTC 严格要求 `timezone.utc`（§4.8 第 3、4 条）。
-- [ ] 新增行级硬规则（§4.8 第 1 条）。
-- [ ] point-in-time 改用 `max_feature_available_at`，第一层检查（§4.8 第 7 条）。
-- [ ] 新增 `gold.market_1m` contract（§4.8 第 6 条）。
-- [ ] 按版本政策处理 `schema_version`（§4.10 第 2 条 L8）。
-- [ ] `docs/SCHEMAS.md` 改为脚本生成，修改 L397 测试（§4.10）。
-- [ ] 补齐 data_schema 测试（§4.8 测试要求）。
+- [x] 设计规则的 JSON 声明格式，把 schema、范围规则、行内规则迁入 JSON；`contracts.py` 只读取并执行（§4.8 第 2 条）。
+- [x] 每个字段加 `description`；registry 自检（§4.8 第 5 条、§4.10 第 3 条）。
+- [x] `get_contract()` 只读；UTC 严格要求 `timezone.utc`（§4.8 第 3、4 条）。
+- [x] 新增行级硬规则（§4.8 第 1 条）。
+- [x] point-in-time 改用 `max_feature_available_at`，第一层检查（§4.8 第 7 条）。
+- [x] 新增 `gold.market_1m` contract（§4.8 第 6 条）。
+- [x] 按版本政策处理 `schema_version`（§4.10 第 2 条 L8）。
+- [x] `docs/SCHEMAS.md` 改为脚本生成，修改 L397 测试（§4.10）。
+- [x] 补齐 data_schema 测试（§4.8 测试要求）。
 
 **第 5 块：adapter**（依赖第 3 块的 Bronze 路径设计和第 4 块的契约）
 
-- [ ] 先提出“API 数据 → `bronze.raw` → 规范化”的溯源方案，交负责人确认（§4.9 第 2 条）。
-- [ ] 统一规范化错误；盘口事件标明数据集；补齐 4 个 Silver 规范化方法（§4.9 第 1、3、4 条）。
-- [ ] 加强 `AdapterMetadata` 校验；基类统一检查时间范围；mock 支持分页（§4.9 第 5–7 条）。
-- [ ] 补齐 adapter 测试（§4.9 测试要求）。
+- [x] 实施“API 数据 → `bronze.raw` → 规范化”的溯源方案，具体选择记录在下方，待负责人复核（§4.9 第 2 条）。
+- [x] 统一规范化错误；盘口事件标明数据集；补齐 4 个 Silver 规范化方法（§4.9 第 1、3、4 条）。
+- [x] 加强 `AdapterMetadata` 校验；基类统一检查时间范围；mock 支持分页（§4.9 第 5–7 条）。
+- [x] 补齐 adapter 测试（§4.9 测试要求）。
 
 **第 6 块：项目文档收尾**（依赖前面所有块的最终结果）
 
-- [ ] `agent/PROJECT.md`：§5 增加 `recovery/`，§8 更新 adapter 接口列表（§4.7、§4.9）。
-- [ ] `docs/pr1/FOUNDATION_RULES.md` 7 处修改（§4.11）。
+- [x] `agent/PROJECT.md`：§5 增加 `recovery/`，§8 更新 adapter 接口列表（§4.7、§4.9）。
+- [x] `docs/pr1/FOUNDATION_RULES.md` 7 处修改（§4.11）。
 - [x] 建立 `docs/adr/` 并移入 ADR-001（2026-11-09 文档整理时完成）。
-- [ ] ADR-001 开头注明由 ADR-002 补充；新建 ADR-002，并登记到 `docs/README.md`（§4.12）。
-- [ ] `README.md` 同步更新、补全启动错误表、改写上游联系方式，并与 `src/config/README.md` 去重（§4.13 第 2–5 条）。
-- [ ] 更新 `docs/pr1/PLAN.md` 状态（§4.15）。
-- [ ] 最后重写 `CHANGELOG.md`（§4.14）。
+- [x] ADR-001 开头注明由 ADR-002 补充；新建 ADR-002，并登记到 `docs/README.md`（§4.12）。
+- [x] `README.md` 同步更新、补全启动错误表、改写上游联系方式，并与 `src/config/README.md` 去重（§4.13 第 2–5 条）。
+- [x] 更新 `docs/pr1/PLAN.md` 状态（§4.15）。
+- [x] 最后重写 `CHANGELOG.md`（§4.14）。
 
 **第 7 块：讲解与验证**
 
-- [ ] Reporter 逐项讲解新的 schema 和规则 JSON 的具体内容（§4.8 第 2 条）。
-- [ ] Validator 对最终版本独立审查。
+- [x] 编写 [schema 与规则逐项复审指南](SCHEMA_REVIEW.md)，供负责人 review 时逐项讲解（§4.8 第 2 条）。
+- [x] Validator 独立审查当前工作区并复核发现的问题；结论为可交负责人复核，不代表批准合并或生产运行。
+
+### 实施记录（2026-11-09，供负责人复核）
+
+- 配置采用 pydantic 2；环境整数只接受 ASCII 十进制数字（允许首尾空白），重复 JSON 和 `.env` 键报错，显式 `environ` 不引用真实进程环境。写预检拒绝不支持硬链接的卷；macOS 上 `/Volumes/<卷名>` 必须存在、不是软链接且为挂载点，并检查路径大小写与软链接别名。卷内更深的软链接可能指向其他卷；卷格式尚未实测，未增加替代发布方式。
+- 写入使用单机协作锁，Bronze 路径中的 `receipt_id` 标识一次接收；同一身份同一目标的相同字节是重试，冲突和中断 partial 保存在 recovery。发布同步文件和父目录；macOS 若明确不支持 `F_FULLFSYNC` 则警告并退回 `fsync`，实际硬件断电行为仍需验证。
+- 契约版本为 `3.0.0`。规则变化均升级版本；兼容新增升级次版本，不兼容变更升级主版本。状态取 `pending/open/closed/settled/cancelled/unknown`，盘口方向取 `bid/ask`，taker 方向取 `buy/sell`；标签可用时间严格晚于观察时间。分钟盘口档位以 JSON 字符串映射正整数序号到十进制字符串，Arrow 存为 string；字段、每条规则及边界见 [复审指南](SCHEMA_REVIEW.md)。
+- 采集返回来源记录；未来调度器先包装、校验、保存 Bronze 外壳，之后调用规范化。adapter 根据外壳的 venue 与 API/协议版本检查路由，从外壳取得 run ID、记录序号和系统接收时间；规范化错误保留外壳，代码错误和错误路由分别上报。盘口方法返回数据集名和行。能力集合及主键与 `AdapterMetadata` 一致；时间范围使用严格 UTC 的 `[start, end)`，不允许起止相等。mock 游标绑定查询范围和方法。
+- 检查（使用 `UV_CACHE_DIR=/private/tmp/prediction-market-uv-cache`）：`uv run --locked ruff check .`、`uv run --locked ruff format --check .` 均通过；`uv run --locked pytest tests/ -v` 为 299 passed、5 warnings；`git diff --check` 通过。独立 Validator 重跑三项命令得到相同结果，并复核了契约、写入恢复、adapter 和配置的已发现问题。
+- 真实交易所、外接卷、断电恢复、PostgreSQL 账本、manifest 与 checkpoint 的原子一致性、训练和回测阶段的第二层 point-in-time 检查均未在 PR1 实现或实测。原 [PR1 计划](PLAN.md)的旧代码逐项迁移清单仍待核对，不属于本代码阅读清单的本次修复范围。
+
+### 实施后复审记录（2026-11-11）
+
+- 第 0 块已核对并向负责人报告；负责人于 2026-11-11 确认按清单顺序继续：两处中文笔记保留并整理格式，清除空白问题，测试文件中的函数签名已按格式调整。`src/cli.py` 的行为变更留第 2 块复审；未发现本块需要决定的问题。
+- 本次使用现有环境运行（`UV_CACHE_DIR=/private/tmp/pr1-review-uv-cache UV_NO_SYNC=1`）：`uv run ruff check .` 通过；`uv run ruff format --check .` 显示 84 个文件格式正确；`uv run pytest tests/ -v` 为 299 passed、5 warnings。首次使用默认缓存运行三项命令均因沙箱不允许访问缓存而失败，改用临时缓存后通过；未验证依赖重新安装。
+- 第 1 块已对照清单和代码、测试、文档；以下待办尚未修改代码。`UV_CACHE_DIR=/private/tmp/pr1-review-uv-cache UV_NO_SYNC=1 uv run pytest tests/test_config.py -q`：33 passed；同环境下 `uv run pytest tests/test_config.py tests/test_pipeline_foundation.py -k 'config or environment or preflight or root or write_check or volume' -q`：63 passed、46 deselected。使用 `DATA_ROOT=/private/tmp` 运行 `uv run python -m src check` 成功。
+  1. **待办（负责人确认，2026-11-11；尚未实施）**：`src/config/validation.py` 的 `ConfigError` 保留 pydantic 异常链；实际以非敏感示例验证，普通错误消息不含输入，但完整 traceback 包含输入。当前 CLI 只打印普通错误消息；调用方记录完整堆栈时存在泄露误传敏感值的风险。保留可读字段和错误原因，对完整异常输出脱敏，并补充完整堆栈测试。
+  2. **待办（负责人确认，2026-11-11；尚未实施）**：`tests/test_config.py::test_missing_volume_fails_before_disk_probe` 预期 macOS 专有检查但未模拟 macOS。实际模拟 Linux 并阻断磁盘探测，观察到到达磁盘探测而非报未挂载。在该测试中显式模拟 macOS，验证未挂载时不探测磁盘；不因此改变生产代码的平台行为。
+  3. **待办（负责人确认，2026-11-11；尚未实施）**：`src/config/README_FOR_DEVELOPER.md` 将 `load()` 描述为“不探测磁盘”易误解：它读取 JSON 和可能的 `.env`，只是不会检查容量或试写。将该句改为明确说明不会检查容量、试写或创建目录。
+- 负责人于 2026-11-11 确认上述三项记录为待办，并同意继续第 2 块 CLI 与日志复审。
+- 第 2 块已对照清单、代码、测试和 ADR；以下待办尚未修改代码。`UV_CACHE_DIR=/private/tmp/pr1-review-uv-cache UV_NO_SYNC=1 uv run pytest tests/test_cli_logging.py tests/test_pipeline_foundation.py -k 'cli or entry_point or logging' -q`：7 passed、73 deselected。实际在 `check_configured_root` 测试替身中发 DEBUG 日志：配置 INFO 时无该日志，配置 DEBUG 时出现 JSON 日志。
+  1. **待办（负责人确认，2026-11-11；尚未实施）**：子进程入口测试覆盖四个 pipeline 环境变量，但会先解析本机 `.env`。在临时隔离的包副本中设置重复的无关 `.env` 键并显式覆盖四个变量，实际命令返回 2；未满足 §4.2 第 8 条中测试不受本机 `.env` 影响的目标。隔离测试的默认环境文件并补充该场景测试，保持正常运行读取本机 `.env` 的行为。
+  2. **待办（负责人确认，2026-11-11；尚未实施）**：`JsonFormatter` 无显式 `event` 时退回 logger 名。实际触发相同写入重试，得到 `event=src.data_io.layout`；其他该模块日志也未声明事件名，因此无法仅凭 event 区分重试和恢复等动作。为实际日志动作提供稳定、可区分的事件名并测试；补充 CLI 从配置传入级别的自动化联动测试。
+  3. **待办（负责人确认，2026-11-11；尚未实施）**：§4.5 要求非执行性的未来命令接入示例；`src/cli.py` 目前只有泛化注释，没有展示命令与任务函数如何对应。增加简短示例注释，不创建未来命令或空模块。
+- 负责人于 2026-11-11 确认第 2 块上述三项记录为待办，并同意继续第 3 块写入层复审。
+- 第 3 块已对照 §4.7、代码、测试与文档；以下发现待负责人决定，尚未修改代码。本次 `UV_CACHE_DIR=/private/tmp/pr1-review-uv-cache UV_NO_SYNC=1 uv run pytest tests/test_writer_recovery.py -q`：9 passed；同环境下运行 `uv run pytest tests/test_writer_recovery.py tests/test_pipeline_foundation.py -k 'writer or layout or scoped or recovery' -q`：21 passed、64 deselected。以下均在临时目录中验证，没有模拟真实断电或测试真实外接盘。
+  1. `receipt_id` 只需出现在 Bronze 路径的任意目录段；实际用同一路径 `bronze/receipt-A/receipt-B/record` 和两个不同接收身份写入相同字节，两次均成功但只产生一份文件，与 FOUNDATION_RULES §3 每次接收均留证的要求不一致。建议规定身份的固定路径位置并校验，补充此反例及独立接收测试；具体路径约定待负责人决定。
+  2. 写预检新建 `DATA_ROOT` 和祖先目录时没有同步其各自的父目录。实际跟踪预检及后续布局和文件写入：根目录内部被同步，但新建根目录和祖先的父目录未被同步。断电可能丢失目录项；建议补齐父目录同步及调用顺序/失败路径测试，真实设备行为另验。
+  3. 恢复遗留 partial 时计算 checksum 并同步目录，但没有对该文件本身执行同步。实际按 inode 跟踪 `_sync_file`：partial 被恢复，但其 inode 未被同步；若原写入在文件同步前中断，后续断电存在持久性风险。建议恢复发布前同步文件并测试同步失败时证据保留。
+  4. 故障注入：恢复说明 JSON 发布后、payload rename 前失败，partial 保留；再次恢复后有两份 JSON、仅一份 bin，留下未标记的孤立说明。建议明确未完成状态或可核对方式，保留证据并测试该中断窗口。
+  5. 目标路径含 NUL 字符时，实际先写出 partial，再抛原始 `ValueError`；建议创建 partial 前拒绝该路径，统一报告 `WriteBoundaryError` 并测试无写入副作用。
+- **第 3 块待办（负责人确认，2026-11-11；尚未实施）**：上述 1–5 项均同意实施。① Bronze 接收身份固定为文件直接父目录，校验传入身份与该目录一致，并补充同一路径包含两个身份及独立接收测试；同步更新 README 和 FOUNDATION_RULES 中的路径约定。② 新建 `DATA_ROOT` 及祖先目录时同步各自父目录，测试同步顺序和失败。③ 恢复遗留 partial 发布前同步文件，测试同步失败时证据保留。④ 为仅有说明但未成功移动数据的恢复记录提供明确状态或可核对方式，保留证据并测试中断窗口。⑤ 写入前拒绝包含 NUL 的目标路径，以 `WriteBoundaryError` 报错并测试无文件副作用。负责人同意继续第 4 块数据契约复审。
+- 第 4 块先复审契约执行机制，数据集字段和规则仍需按 Bronze、Silver、Gold 逐项讲解。`UV_CACHE_DIR=/private/tmp/pr1-review-uv-cache UV_NO_SYNC=1 uv run pytest tests/test_data_schema.py -q`：27 passed；同环境运行 `uv run pytest tests/test_data_schema.py tests/test_pipeline_foundation.py -k 'schema or contract or training or gold or silver or bronze' -q`：49 passed、54 deselected。以下发现待负责人决定，尚未修改代码：
+  1. `_check_rule` 的 `difference` 直接使用调用方的 Decimal context。实际以 bid=0.1234567890、ask=0.8765432109、spread=0.75 验证，精度 28 时拒绝，精度 2 时错误接受；建议进行与调用环境无关的精确差值校验并测低精度与异常陷阱。
+  2. registry 使用普通 `json.loads`，实际在临时文本中重复声明顶层 version 为 3.0.0 和 9.9.9，自检通过且后者覆盖前者；当前文件未发现重复。建议加载时拒绝任意层重复键并测试。
+  3. 实际从 registry 的内存副本删除 bronze.raw 的 version 规则，`validate_registry` 仍通过；当前 14 个数据集都有 version 规则。建议自检防止版本规则遗漏，并保持执行器不硬编码数据集或字段名的设计；待负责人决定具体实现。
+  4. 实际将 `silver.markets.title` 设置为无法 UTF-8 编码的孤立 Unicode 代理码点：`validate_record` 接受，但转为 Arrow 字符串时抛出 `UnicodeEncodeError`。建议在契约边界拒绝无法编码的字符串并补测试；Bronze 原始证据保留方式须单独考虑。
+  5. Python 实际验证 `timezone(timedelta(0)) is timezone.utc`；无法按此前想法仅凭对象区分二者构造方式。现实现按 tzinfo 对象身份严格接受 timezone.utc 并拒绝 ZoneInfo UTC/伦敦冬季，待负责人确认此限制。
+- **第 4 块执行机制待办（负责人确认，2026-11-11；尚未实施）**：① 使用不受调用方 Decimal 精度和异常设置影响的精确差值检查，补充低精度及异常设置测试。② registry 加载时拒绝任意层重复 JSON 键并补测试。③ 自检防止数据集遗漏版本校验，保持执行器不硬编码具体数据集名，并补测试。④ 在需要作为 Arrow 字符串保存的字段边界拒绝无法 UTF-8 编码的值并补测试；Bronze 原始证据的保留方式在 Bronze 复审时单独讨论。⑤ 接受 `tzinfo is timezone.utc` 对象身份规则及 `timezone(timedelta(0))` 与其不可区分的语言限制；在文档保留说明并以测试验证。负责人同意继续逐项复审 Bronze 数据集。
+- Bronze `bronze.raw` 已进行代码、测试和文档初核，尚未向负责人逐字段讲解及确认设计：HEAD 的 v2 与工作区 v3 对照显示，14 个字段的类型、可空性及 `(run_id, record_index)` 主键不变；本次新增字段说明、规则 JSON 声明和严格 UTC，并将共用版本升级至 3.0.0。本次指定 6 项 Bronze/adapter 测试（含参数化）为 7 passed；相关名称筛选为 10 passed、122 deselected。实际验证 `venue=None`、`api_version=None` 和非法原始 JSON 均被契约拒绝，重复键 JSON 被接受；当前只保留在 mock 规范化异常中的证据不等于已经落盘或进入 quarantine。需对照 PROJECT.md §6、§8 继续讨论非 venue 来源、不适用 API 版本和无法解析的原始字节如何持久保留；目前无真实 collector 或调度器，不声称已有数据丢失。`ingested_at` 早于 `received_at` 也被接受，时间异常的处理策略待讨论。
+- 负责人于 2026-11-11 指示先审核并修复目前已确认的待办，再由独立 Validator 审查并记录发现，之后修复一轮，再继续逐项阅读；Bronze 上述尚未确认的设计选择暂保留为开放事项。
+- **首轮 Analyst 实施记录（2026-11-11）**：上文标注“尚未实施”的第 1–4 块已确认事项现均已完成初次修改，待独立 Validator 复核；原记录保留当时的决定和证据，不表示当前状态。配置/CLI 的定向测试为 73 passed、45 deselected；写入层为 25 passed、64 deselected；契约/adapter 为 144 passed。统一检查使用 `UV_CACHE_DIR=/private/tmp/pr1-review-uv-cache UV_NO_SYNC=1`：`uv run ruff check .` 通过，`uv run ruff format --check .` 显示 84 files already formatted，`uv run pytest tests/ -v` 为 320 passed、5 warnings；`git diff --check` 通过。真实外接盘、硬件断电、真实 venue 和 Bronze 采集流程仍未实测。
+- **本轮独立 Validator 发现（2026-11-11；第二轮修复前）**：三名 Validator 均重跑 Ruff 检查、格式检查及完整测试，分别观察到通过、84 个文件格式正确、320 passed/5 warnings；并复跑各自定向测试。结论 `changes required`。以下为实际复现或对照的发现：
+  1. 大小写不敏感卷上，`receipt_id=A` 与 `a` 指向同一文件且相同字节被当作重试，丢失独立接收证据；真实 macOS 临时卷实测。
+  2. DATA_ROOT 内存在嵌套挂载时，partial 可能与 recovery 跨卷，rename 返回 EXDEV；故障注入后数据仍在原 partial，但后续初始化恢复持续失败；未实测真实嵌套挂载。
+  3. 现有恢复 payload 的 JSON 说明损坏时，初始化仅检查其存在，静默视为配对；实际将说明写为无效 JSON 后复现。
+  4. 默认 `.env` 是目录时被静默忽略；Pydantic `model_validate`、`model_validate_json` 和嵌套 model 可绕开首轮异常转换，完整异常堆栈包含输入。均已用非敏感临时数据复现。
+  5. adapter 子类可改写传入 Bronze 外壳并让溯源校验对照被改写值；普通和盘口路径均有风险。只读 Mapping 外壳遇错误时 `deepcopy` 抛 TypeError，统一错误与原始证据丢失。均已用 mock 实测。
+  6. 极端 JSON 小数指数可抛未包装的 `decimal.InvalidOperation`，绕过 `ContractError` 和 adapter 的 `NormalizationError`；已实测。
+  7. `gold.market_1m` 明确零覆盖仍接受盘口值和价差，且接受大于 1 的概率价差；`gold.market_1s` 双侧报价缺失时接受 mid，且接受与报价平均值不符的 mid；已实测。未知覆盖 `None` 与零不能混同。
+  8. `silver.outcomes.label` 与 `gold.training_datasets.label` 的说明互相混淆；Silver 三个事件时间、daily 成交量与笔数的说明和必填类型矛盾。来源事件时间缺失、daily 成交缺失语义须遵守 FOUNDATION_RULES §5，不能编造时间或把未知填零。
+  9. 开放设计：Bronze 非 venue、非 JSON/无效字节如何在解析前持久留证尚未决定；当前没有真实采集和持久化任务，不能声称已有数据丢失。此项须保留供负责人后续逐项复审，不自行确定架构。
+- **新工作流配置块 B1（2026-11-13）**：首次循环第三轮因 Pydantic 内置错误消息可能包含输入而升级负责人；负责人同意固定安全错误消息后，第二循环经两轮独立 Reviewer 审查已收敛。复现、修复和检查结果见 [REVIEW_LOG.md](REVIEW_LOG.md)。其他 Validator 发现的工作区变更尚未按本工作流逐块审查，Bronze 开放设计仍待确认。
+- **新工作流写入层 B2（2026-11-13）**：针对上述 Validator 发现 1–3 的既有实现进行审查，第一轮发现目录同步失败重试和 partial 说明字段校验问题，修复后第二轮独立 Reviewer 审查收敛。具体变更、测试及限制见 [REVIEW_LOG.md](REVIEW_LOG.md)；其他块及 Bronze 开放设计仍待处理。
+- **新工作流 Adapter B3（2026-11-13）**：首次循环发现某些无效 Python 对象无法生成独立证据副本，负责人同意无法复制时保留原对象并明确标记；第二循环经三轮独立 Reviewer 审查后收敛。具体变更、检查与限制见 [REVIEW_LOG.md](REVIEW_LOG.md)。
+- **新工作流数据契约 B4（2026-11-13）**：负责人确认一秒盘口可保留而未知滚动成交量留空；针对精度和单行矛盾实施修复，契约版本由工作区未发布的 `3.0.0` 提升至 `4.0.0`。两轮独立 Reviewer 审查后收敛；具体变更、测试及未实现的计算和迁移见 [REVIEW_LOG.md](REVIEW_LOG.md)。Bronze 非 venue、无效字节留证设计仍待负责人逐项复审。
+- **Bronze 契约逐项复审（2026-11-13，进行中）**：工作区版本 `4.0.0`；对照 `agent/PROJECT.md` §3、§5–6、`FOUNDATION_RULES.md` §3、当前 `bronze.raw`、mock adapter 和测试。实际运行 `uv run pytest tests/test_data_schema.py tests/test_pipeline_foundation.py tests/test_adapter_contract.py -k 'bronze or provenance or readonly or envelope or normalization_failures or duplicate_source' -q`（`UV_CACHE_DIR=/private/tmp/pr1-review-uv-cache UV_NO_SYNC=1`）：24 passed、171 deselected。临时内存示例验证：`venue=None`、`api_version=None`、二进制 `raw_payload` 和非法 JSON 均被拒绝；合法 JSON `null` 以及 `ingested_at` 早于 `received_at` 均被契约接受。当前 mock 规范化要求 JSON 对象，且没有真实采集、原始字节持久化或完整 quarantine 流程。非交易所来源字段、原始字节保存以及时间异常的策略尚待负责人讨论，本记录不表示已决定或已实施。
+- **Bronze 来源及原始内容决定（负责人确认，2026-11-13；待实施和后续设计）**：`source` 保持必填；没有交易所时 `venue` 可空，没有或不知道 API 版本时 `api_version` 可空，不编造信息。按照来源需要保留原始文件或字节及登记信息；具体保留完整响应还是逐条消息，由各来源设计时决定。解析失败保留证据并记录原因；当前尚未实现原始字节自动持久化或完整隔离流程。以上为方向和待办，不表示已确定字段结构或已修改代码。需评估契约版本、数据路径、清单与测试，并与 `agent/PROJECT.md`、`FOUNDATION_RULES.md`、`docs/SCHEMAS.md`、adapter 边界保持一致。
+- **Bronze 时间异常处理方向（负责人确认，2026-11-13；待实施和后续设计）**：时间缺失时留空，不以其他时间冒充；时间顺序异常时保留原始数据和记录下来的时间，不自动改写，记录问题并先检查受影响记录，正常记录可继续处理。来源事件时间晚于接收时间可能与来源时间含义或时钟偏差有关，具体判断与容许偏差按来源研究，不预设统一秒数；检查后如需修复或带 caveat 使用，须遵循人工审核规则。具体字段可空性、检查和记录方式、审核流程、配置和测试待设计；当前契约仍接受 `ingested_at < received_at`，相关质量检查和隔离流程尚未实现。
+- **Silver 市场契约初核（2026-11-13，进行中；待负责人讨论）**：当前 `silver.markets` 11 字段，主键为 `(venue, market_id, observed_at)`，mock 从 Bronze 接收时间填充 `observed_at`。`open_at <= close_at` 两者有值时执行，允许相等；状态限制六种。对照 `FOUNDATION_RULES.md` §3，当前契约没有市场描述和结算条件字段；`open_at`、`close_at` 的说明没有区分计划时间与实际时间。内存示例验证：开放与关闭相等、关闭时间晚于观察时间可通过；关闭早于开放和增加未声明 `description` 字段被拒；`unknown` 状态通过。`UV_CACHE_DIR=/private/tmp/pr1-review-uv-cache UV_NO_SYNC=1 uv run pytest tests/test_data_schema.py tests/test_adapter_contract.py tests/test_pipeline_foundation.py -k 'market_time or market_states or normalize_market or new_normalizers or market_crossed or normaliz' -q`：21 passed、174 deselected。以上为当前行为与发现，尚未决定或实施修改；是否增加字段及时间语义须与负责人讨论。
+- **Silver 市场契约决定（负责人确认，2026-11-13；待实施）**：增加可空的市场描述和结算条件字段，来源未提供时留空；分别保存来源公布的计划开放/关闭时间与有可靠证据的实际开放/关闭时间。来源没有说明时间属于计划还是实际时保留来源原文，不猜测字段含义。具体字段名、历史版本和来源映射在实施方案中明确；更新数据契约、mock adapter、相关文档和测试，按规则处理 schema 版本。以上是阅读中确认的待办，尚未修改代码，也未验证真实来源。
+- **Silver outcome 契约初核（2026-11-13；待实施）**：当前 `silver.outcomes` 8 个字段，主键为 `(venue, outcome_id, observed_at)`，虽有必填 `market_id` 但不属于主键。项目要求保留来源提供的 outcome 说明；当前只有非空显示名称 `label`，没有单独说明字段。内存示例验证：空名称、空市场 ID、空 outcome ID、负的 Bronze 记录序号及额外未声明的 `description` 都被拒绝。`UV_CACHE_DIR=/private/tmp/pr1-review-uv-cache UV_NO_SYNC=1 uv run pytest tests/test_adapter_contract.py tests/test_pipeline_foundation.py tests/test_data_schema.py -k 'outcome or new_normalizers or provenance or silver_missing' -q`：17 passed、178 deselected；其中 outcome 成功转换及缺少 label 失败为直接测试，溯源和可空时间等筛选结果包括其他数据集。尚未验证真实交易所 outcome ID 是否在整个交易所唯一；跨行主键唯一性未由本行契约检查。后续选择见下一条，未修改代码。
+- **Silver outcome 后续待办（agent 自主决定，2026-11-13；待实施）**：依据 `FOUNDATION_RULES.md` §3，增加可空的来源 outcome 说明，不替来源编造内容；主键加入已有必填 `market_id`，避免同一来源的不同市场重用相同 outcome ID、且观察时间相同时发生身份冲突。临时示例中两行可单行校验通过，但现有主键相同；加入市场 ID 后可区分。该示例是模拟，不代表真实交易所一定重用 ID；各来源真实 ID 的范围、全局唯一性及跨市场一致性仍需在相应 adapter PR 核实，不能凭名称猜测或因此忽略来源要求。需要更新契约版本、mock、文档及身份冲突和可空说明测试；当前未修改代码。该决定由 agent 根据负责人授权和已有规则作出，不表示负责人逐项确认。
+- **Silver 成交契约初核（2026-11-13；阅读进行中）**：当前 `silver.trades` 12 个字段，以 `(venue, trade_id)` 标识；`outcome_id`、`event_time` 和 `taker_side` 可空，价格范围为 0–1、数量不小于零。内存示例实测：缺 outcome、来源事件时间和主动方可通过，数量为零可通过，缺数量或价格大于 1 会拒绝。mock 的成交转换当前将 outcome 固定设空，不代表真实来源一定缺失。`UV_CACHE_DIR=/private/tmp/pr1-review-uv-cache UV_NO_SYNC=1 uv run pytest tests/test_data_schema.py tests/test_adapter_contract.py tests/test_pipeline_foundation.py -k 'trade or normalization_failures or provenance or silver_missing' -q`：18 passed、177 deselected，其中筛选包含其他数据集的间接测试。成交 ID 的真实唯一范围、零数量是否可能及数据单位需在对应来源 adapter 中核实；缺失 outcome 对下游产品的影响须在质量和产品规则中处理，不能猜测。当前没有据此修改成交契约。
+- **剩余 Silver / Gold 契约阅读（2026-11-13；未修改契约代码）**：逐项对照 `schema_registry.json`、`SCHEMAS.md`、`SCHEMA_REVIEW.md`、`FOUNDATION_RULES.md` 和对应测试，覆盖 `silver.events`、`silver.market_states`、`silver.book_snapshots`、`silver.book_deltas`、`silver.settlements`、`gold.market_daily`、`gold.market_1s`、`gold.liquidity_features`、`gold.training_datasets`、`gold.market_1m`。实际运行 `UV_CACHE_DIR=/private/tmp/pr1-review-uv-cache UV_NO_SYNC=1 uv run pytest tests/test_data_schema.py tests/test_pipeline_foundation.py tests/test_adapter_contract.py -k 'schema or contract or market or trade or outcome or book or settlement or event or training or gold or silver or bronze' -q`：153 passed、42 deselected。测试涵盖单行字段/规则及 mock 转换，不证明真实来源、跨行唯一、盘口重建或 Gold 产出流程；字段逐项及规则见 `SCHEMA_REVIEW.md`。
+- **阅读发现与后续处理（agent 自主决定，2026-11-13；待实施或后续 PR）**：
+  1. 当前 `silver.settlements.settled_at` 必填；实际输入 `None` 被拒。按负责人时间缺失不编造的方向，允许保留未知结算时间，但依赖结算时刻的质量检查和研究不得把未知当作已确认时间。需在本 PR 补契约/adapter/文档及空值测试，实际时间规则按来源核实。
+  2. 当前 `gold.training_datasets` 接受标签有值但 `label_available_at=None`（已实测）。保留未知时间，不编造；不能把无法确认标签何时可用的记录自动当作可训练数据，须在未来质量门禁/训练构建中检查或经过明确记录的批准假设。当前没有这道门禁，不能声称已实现；需在 PR4 质量规则及后续训练/回测任务说明中引用并测试。
+  3. `gold.market_daily` 实测接受 `day=2024-01-02`、`as_of=2024-01-01 00:00 UTC`。同一日的成交汇总不应早于该 UTC 日开始；本 PR 增加最小时间边界及测试。不把“日已结束”作为默认要求，是否允许日内部分汇总及完整性由后续产品与覆盖规则明确。
+  4. `silver.market_states` 的买卖报价没有 outcome 标识；`gold.liquidity_features.depth_top_n` 没说明买侧、卖侧还是合计，均已核对字段和内存示例。不得默认报价对应 Yes 或深度含义；真实来源映射与产品口径留待对应 adapter / 特征设计，未确定前不可把它们当作已核实的 outcome 级指标。需补来源级测试和说明；不凭 mock 声称真实来源行为。
+  5. `silver.book_snapshots` 对每档结构、范围和精度有行级检查，但实测买价 0.9、卖价 0.1 的盘口仍可通过；跨档排序、重复档位、序列缺口和真实来源的交叉盘口语义也未验证。PR4/PR7 须依据来源规则检查、保留证据并将异常送审核，不能声称本行契约已保证盘口完整；不可无依据将所有来源的一种盘口状态一律判定为错误。
+  6. `gold.market_1s` 的 `update_count` 必填而数据不完整时的含义未定义；`gap` / `recovery` 的来源证据与完整性也未由行级契约证明。PR7 数据记录和产品设计须明确如何区分未知、确认为零和已知缺口，且不得把缺失数据冒充无更新；相关记录和质量检查目前均未实现。
+- **后续实施约束**：上述 agent 自主决定依据既有负责人授权和项目规则，不表示负责人逐项确认。阅读阶段不修改代码；PR1 已确认项整理为待办后由 Analyst 实施并经 Reviewer 复核。需按契约版本政策更新版本、生成字段文档并同步 mock/测试；真实来源 ID、时钟、精度例外、跨行质量检查及 manifest/隔离/聚合仍由相应后续 PR 验证，不编造或提前声称实现。
+- **新工作流 Bronze B5（2026-11-13）**：实施 Bronze 来源、原始内容及时间异常决定：`venue`、`api_version` 可空，新增 `raw_bytes`，与 `raw_payload` 恰好填一个，契约版本升至 `5.0.0`；`VenueAdapter` 规范化边界按“外壳校验 → 路由 → 时间异常 → 解码与严格解析”的顺序处理，写入时间早于接收时间时不输出 Silver，并保留证据。Round 1 发现路由检查晚于内容解析、空身份缺回归测试和文档执行位置不准确，修复后 Round 2 独立 Reviewer 审查收敛。交负责人：B5-R1-4（`agent/PROJECT.md` §6 原始记录字段列表缺 `raw_bytes`、`api_version`、`protocol_version`，修改须负责人确认）；B5-R1-6（无 API 版本的 venue 记录目前无法进入 Silver，留待来源设计）。B5-R2-1 的 bytes 子类测试已随 B6 修订补上。原始字节落盘、quarantine 流程、真实来源和旧版本迁移均未实现或验证。详见 [REVIEW_LOG.md](REVIEW_LOG.md)。
+- **负责人决定（2026-11-13，B5 报告后）**：① 同意补全 `agent/PROJECT.md` §6 原始记录外壳字段列表（加入 `api_version`、`protocol_version`、`raw_payload / raw_bytes`），已修改。② API 版本改为可选：adapter 可以不声明 API 版本，以便无 API 版本的来源记录可路由并规范化到 Silver；作为 B5a 在 B6 审查结束后实施并经独立 Reviewer 审查。
+- **B6 实施状态（2026-11-13）**：上文“Silver 市场契约决定”、“Silver outcome 后续待办”及“阅读发现与后续处理”第 1 条（结算时间可空）已在 B6 实施（契约 `6.0.0`），原文中“待实施/尚未修改代码”保留为当时记录。B6 Round 1 的 B6-R1-1 指出“保留来源原文”被 agent 解释为仅留在 Bronze；经询问，负责人确认在 Silver 新增 `source_open_time_text`、`source_close_time_text` 按原样保存未分类时间原文，四个计划/实际时间仍留空。
+- **新工作流 Silver B6（2026-11-13）**：两轮独立 Reviewer 审查后收敛（契约 `6.0.0`）。交负责人/后续：B6-R1-5 无时间结算的回填方式留 PR5/PR6；B6-R2-1 未分类时间原文遇空字符串或非字符串原值时的映射由来源 adapter 决定，已在 SCHEMA_REVIEW 补充说明（随 B5a 修订复核）。详见 [REVIEW_LOG.md](REVIEW_LOG.md)。
+- **新工作流 B5a · API 版本可选（2026-11-13）**：实施负责人决定 ②：`AdapterMetadata.api_version` 可为 `None`，声明时须为非空字符串；无 API 版本的 Bronze 记录可由同样无版本的 adapter 规范化到 Silver，有/无版本之间互不误路由；B5 条目中“无 API 版本的 venue 记录目前无法进入 Silver”已不再成立。独立 Reviewer 一轮收敛；三条 suggestion（本条目、ADR-002/CHANGELOG 说明、`api_protocol_version` 区分 `None` 与字面 `"none"`）已采纳，随 B7 修订复核。交后续（B5a-R1-4，PR5/PR6）：一个 adapter 只接受一种 API 版本，同一来源多版本需分别建 adapter；`venue=None` 记录仍无 adapter 可规范化，均明确报错不静默丢弃。
+- **新工作流 B7（2026-11-13）**：上文“阅读发现与后续处理”第 3 条已实施：新增通用 `day_start` 规则，`gold.market_daily.as_of` 不得早于 `day` 的 UTC 零点，不要求当日已结束，契约升至 `7.0.0`。第 2、4、5、6 条作为后续限制记录在 [SCHEMA_REVIEW.md](SCHEMA_REVIEW.md) “关键选择”第 7 条（未实现）。独立 Reviewer 一轮收敛；三条 suggestion（本条目、错误信息包含被拒日期值、直接测试 `day_start` 日期解析分支并为声明自检加 `match`）已采纳，交最终 Validator 复核。
+- **最终 Validator Round 1 与 B8（2026-11-13）**：Validator 结论 `changes required`（3 条 should-fix，无 must-fix），并按新增的“必要性与简化”审查提出简化建议。负责人决定：迁移清单移至 PR3；写锁保持立即失败并写清语义，超时与扫描范围留 PR2；在 PR1 的 `check` 中实现启动配置日志（硬规则 10）；同意删除 recovery 旧格式兼容、`gc` 可信性判断和 adapter 的 `validation_rules` 声明。上述修复作为 B8 实施，待独立 Reviewer 循环后交 Validator 复查。详见 [REVIEW_LOG.md](REVIEW_LOG.md)。
+- **B8 收敛（2026-11-13）**：独立 Reviewer 三轮后收敛（474 passed）。Round 1 发现 S4 实际影响大于原描述（合法只读代理外壳也无法规范化，规范化输入须为普通 `dict`），已写入 README/CHANGELOG/ADR-002 并加测试，已告知负责人；Round 2 发现来源记录用只读映射导致配置无法 pickle/深拷贝，改为元组并加测试。待最终 Validator 复查。
+- **最终 Validator Round 2（2026-11-13）**：结论 `ready for owner review`（不代表批准合并）；Round 1 全部发现已复核解决，无 must-fix/should-fix。遗留不阻塞项：V2-1 `config.effective` 在 WARNING 以上级别不输出，首个数据任务（PR2）决定是否无视日志级别；V2-2 `environment:*` 来源不区分进程环境与 `.env`；V2-S1 `_payload` 中恒真的 `isinstance(raw, Mapping)` 可删。合并由负责人决定。
+- **负责人决定与 B9（2026-11-13，Validator Round 2 之后）**：负责人希望合法的只读映射可以规范化，撤回 V1-S4。恢复 B3 已审查的做法：只读映射代理的底层经 `gc.get_referents` 确认为普通 `dict` 时信任并复制（结果为 dict，可规范化），其他映射保留原引用并标为非快照。恢复两条只读证据测试，新增 `test_valid_readonly_envelope_normalizes_like_a_dict`；README、CHANGELOG、ADR-002 同步。待独立 Reviewer 与 Validator 复查。
+- **B9 收敛与最终 Validator Round 3（2026-11-13）**：B9 独立 Reviewer 一轮收敛，三条 suggestion 已采纳（`raw.copy()` 避免检查前运行键钩子、文档注明依赖 CPython、测试断言证据为 dict 快照）。Validator Round 3 结论 `ready for owner review`（475 passed），不代表批准合并。留给 PR2 调度器设计时请负责人再确认：V3-Q1 是否仍需支持只读代理输入；V2-S1 `_payload` 中恒真的 `isinstance` 可删。
 
 ## 3. 实施中需要负责人确认的事项
 
-Analyst 遇到以下问题时，先提出方案，经负责人确认后再写入代码或文档：
+以下事项需要在实施记录中写明最终选择，供负责人重新 review。负责人于 2026-11-09 授权先实施，不必逐项暂停确认；其中环境变量整数接受十进制数字字符串，拒绝 `"4_000"` 和 `"+4"`。
 
 | 事项 | 所在块 | 详情 |
 | --- | --- | --- |
@@ -121,7 +204,7 @@ Analyst 遇到以下问题时，先提出方案，经负责人确认后再写入
 
 ## 4. 待办详情（PR1 实施）
 
-以下均尚未实施；阅读期间不修改代码，读完后交给 Analyst。
+以下为阅读后交给 Analyst 的待办；已完成的事项以第 2 节的状态为准。
 
 ### 4.1 配置：预期字段、pydantic 与 `validation.py`
 

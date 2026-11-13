@@ -96,6 +96,7 @@ data/
 ├── gold/
 │   └── <venue>/<market_id>/market_1m/<data_version>/<UTC-date>.parquet
 ├── quarantine/
+├── recovery/                    # 保留冲突写入和中断的 partial
 └── manifests/
 ```
 
@@ -111,7 +112,7 @@ Every run must leave a complete audit trail:
 - **Checkpoint record**: cursor / timestamp / block number, last successfully committed data file, source watermark, validation-complete flag, update version.
   - **Advancement rule**: a checkpoint may only move forward after the data file is durably written + validated + registered in the manifest.
 - **File manifest**: path, row count, schema version, min/max event time, min/max source sequence, checksum, primary-key hash, creating run ID.
-- **Raw record envelope**: venue, source, message_type, source_event_id, event_time, received_at, ingested_at, sequence, schema_version, raw_payload.
+- **Raw record envelope**: venue, source, message_type, source_event_id, event_time, received_at, ingested_at, sequence, api_version, protocol_version, schema_version, raw_payload / raw_bytes（JSON 原文与原始字节恰好填写一种）。
 
 原始数据也可能来自非 venue 来源或原始文件；缺失或不适用的来源信息不能编造。Bronze 已保存内容不得静默改写；未来归档或清理必须有可核查的清单并经负责人确认，保留审核与追溯记录。每个运行的机器可读记录使用 JSON；人可读 Markdown 默认生成，可由任务设置关闭。PostgreSQL 账本、JSON 记录和文件的一致性与中断恢复属于后续实现。
 
@@ -140,9 +141,15 @@ class VenueAdapter:
     def normalize_market(...)
     def normalize_trade(...)
     def normalize_book_event(...)
+    def normalize_settlement(...)
+    def normalize_event(...)
+    def normalize_outcome(...)
+    def normalize_market_state(...)
 ```
 
-Each adapter must declare: supported capabilities, API/protocol version, primary keys, pagination/checkpoint semantics, rate limits, timestamp semantics, price/quantity precision, validation rules.
+Each adapter must declare: supported capabilities, API/protocol version (when applicable; declared as none rather than invented when the source has none — owner decision 2026-11-13), primary keys, pagination/checkpoint semantics, rate limits, timestamp semantics, price/quantity precision. Validation rules come from the shared data contracts in `src/data_schema/` rather than a per-adapter declaration (owner decision 2026-11-13).
+
+采集方法返回来源记录；未来调度器负责包装、校验并持久化 `bronze.raw` 外壳，再将外壳交给规范化方法。Silver 的 Bronze 追溯字段来自外壳，不要求来源 payload 自带运行标识。规范化失败保留证据并抛出统一错误；不支持的能力与空结果明确区分。盘口规范化结果标明快照或增量数据集。
 
 ## 9. Execution Plan
 

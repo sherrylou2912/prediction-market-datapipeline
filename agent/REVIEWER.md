@@ -27,7 +27,7 @@ Do not modify code, data, branches, or external systems. Your output is findings
 | `must-fix` | Wrong behavior, hard-rule violation, data-integrity risk, failing check, or missing test for a stated requirement. | Yes |
 | `should-fix` | Real weakness inside the block's scope: fragile design, unclear error, missing edge-case test, outdated doc. | Yes |
 | `suggestion` | Optional improvement or style preference within scope. | No — passed to Reporter |
-| `out-of-scope` | Valuable, but belongs to a later block, PR, or a design change the owner must decide. | No — passed to Reporter |
+| `out-of-scope` | Valuable, but belongs to a later block or PR, or requires an unresolved owner decision. | No — passed to Reporter |
 
 Do not inflate severity to force a change, and do not downgrade a real risk to end the loop sooner. Each finding must be specific enough to act on: file and line, what happens, why it matters, and a suggested direction.
 

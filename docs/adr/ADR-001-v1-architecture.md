@@ -2,6 +2,8 @@
 
 Status: Accepted for v1
 
+部分决定由 [ADR-002](ADR-002-pr1-foundation.md) 补充。
+
 Date: 2026-10-14
 
 ## Context

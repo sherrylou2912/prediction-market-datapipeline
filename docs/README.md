@@ -42,9 +42,10 @@
 
 | 文档 | 用途 |
 | --- | --- |
-| [`docs/SCHEMAS.md`](SCHEMAS.md) | 数据契约 v2（测试会核对它与 registry 一致，路径不要移动） |
+| [`docs/SCHEMAS.md`](SCHEMAS.md) | 数据契约字段及规则（由 registry 生成，路径不要移动） |
 | [`docs/notes.md`](notes.md) | 负责人私人设计笔记 |
 | [`docs/adr/ADR-001-v1-architecture.md`](adr/ADR-001-v1-architecture.md) | ADR-001：单机、版本化数据 pipeline（已接受） |
+| [`docs/adr/ADR-002-pr1-foundation.md`](adr/ADR-002-pr1-foundation.md) | ADR-002：PR1 基础设施和契约补充决定（实施中，待负责人复核） |
 
 ### PR1
 
@@ -53,6 +54,8 @@
 | [`docs/pr1/FOUNDATION_RULES.md`](pr1/FOUNDATION_RULES.md) | PR1 基础规则与后续实现边界 |
 | [`docs/pr1/PLAN.md`](pr1/PLAN.md) | PR1 工作拆分计划 |
 | [`docs/pr1/CODE_READING_PROGRESS.md`](pr1/CODE_READING_PROGRESS.md) | PR1 逐文件代码阅读进度、Analyst 实施清单和待办 |
+| [`docs/pr1/REVIEW_LOG.md`](pr1/REVIEW_LOG.md) | PR1 修复各块的审查意见、回复和检查记录 |
+| [`docs/pr1/SCHEMA_REVIEW.md`](pr1/SCHEMA_REVIEW.md) | PR1 契约字段、主键、行级规则及实现选择的复审指南 |
 | [`docs/pr1/archive/ARCHITECTURE_REVIEW_2026-10-14.md`](pr1/archive/ARCHITECTURE_REVIEW_2026-10-14.md) | 已归档：2026-10-14 的验收报告，已被阅读进度取代 |
 
 ### 旧流程
