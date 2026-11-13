@@ -51,7 +51,7 @@ def test_check_logs_effective_settings_sources_and_hash(tmp_path: Path, capsys: 
     (event,) = [json.loads(line) for line in output.splitlines()]
     assert event["event"] == "config.effective"
     settings = event["details"]["settings"]
-    assert set(settings) == {"data_root", "min_free_gib", "log_level", "config_dir"}
+    assert set(settings) == {"data_root", "min_free_gib", "log_level", "config_dir", "writer_lock_timeout_seconds"}
     assert settings["data_root"] == {"value": str(tmp_path), "source": "environment:DATA_ROOT"}
     assert settings["min_free_gib"] == {"value": "0", "source": "environment:DATA_MIN_FREE_GIB"}
     assert settings["log_level"] == {"value": "INFO", "source": "default:runtime.json"}

@@ -17,7 +17,7 @@ from pydantic import PrivateAttr
 
 from src.config.errors import ConfigError
 from src.config.loader import DEFAULT_CONFIG_DIR, load_environment, load_json_object
-from src.config.validation import AbsolutePath, ConfigModel, LogLevel, NonnegativeInteger
+from src.config.validation import AbsolutePath, ConfigModel, LockTimeoutSeconds, LogLevel, NonnegativeInteger
 
 
 def _nearest_existing_directory(path: Path) -> Path:
@@ -83,8 +83,12 @@ class _StorageDefaults(ConfigModel):
 
 
 class _RuntimeDefaults(ConfigModel):
-    _error_names: ClassVar[dict[str, str]] = {"log_level": "PIPELINE_LOG_LEVEL"}
+    _error_names: ClassVar[dict[str, str]] = {
+        "log_level": "PIPELINE_LOG_LEVEL",
+        "writer_lock_timeout_seconds": "PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS",
+    }
     log_level: LogLevel
+    writer_lock_timeout_seconds: LockTimeoutSeconds = 0
 
 
 class _ConfigDirectory(ConfigModel):
@@ -100,11 +104,14 @@ class PipelineConfig(ConfigModel):
         "min_free_gib": "DATA_MIN_FREE_GIB",
         "log_level": "PIPELINE_LOG_LEVEL",
         "config_dir": "PIPELINE_CONFIG_DIR",
+        "writer_lock_timeout_seconds": "PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS",
     }
     data_root: AbsolutePath
     min_free_gib: NonnegativeInteger
     log_level: LogLevel
     config_dir: AbsolutePath
+    # Seconds a writer or ledger transaction waits for a held lock; 0 fails immediately.
+    writer_lock_timeout_seconds: LockTimeoutSeconds = 0
     # Where each effective value came from; set by load(), "direct" otherwise.
     # Immutable and picklable (field, source) pairs.
     _sources: tuple[tuple[str, str], ...] = PrivateAttr(default=())
@@ -141,11 +148,15 @@ class PipelineConfig(ConfigModel):
         except ValueError as exc:
             raise ConfigError("DATA_MIN_FREE_GIB is too large to parse.") from exc
         raw_level = values.get("PIPELINE_LOG_LEVEL", "").strip()
+        raw_timeout = values.get("PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS", "").strip()
+        if raw_timeout and (not raw_timeout.isascii() or not raw_timeout.isdecimal() or len(raw_timeout) > 4):
+            raise ConfigError("PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS must be an integer from 0 to 3600.")
         config = cls(
             data_root=Path(raw_root).expanduser(),
             min_free_gib=minimum,
             log_level=raw_level or runtime.log_level,
             config_dir=directory.resolve(strict=True),
+            writer_lock_timeout_seconds=int(raw_timeout) if raw_timeout else runtime.writer_lock_timeout_seconds,
         )
         sources = {
             "data_root": "environment:DATA_ROOT",
@@ -156,6 +167,9 @@ class PipelineConfig(ConfigModel):
             else "environment:PIPELINE_CONFIG_DIR"
             if raw_config_dir
             else "default:src/config/defaults",
+            "writer_lock_timeout_seconds": "environment:PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS"
+            if raw_timeout
+            else "default:runtime.json",
         }
         config._sources = tuple(sources.items())
         return config

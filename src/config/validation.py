@@ -25,6 +25,15 @@ def _nonnegative_integer(value: Any) -> int:
     return value
 
 
+MAX_LOCK_TIMEOUT_SECONDS = 3600
+
+
+def _lock_timeout_seconds(value: Any) -> int:
+    if type(value) is not int or not 0 <= value <= MAX_LOCK_TIMEOUT_SECONDS:
+        raise PydanticCustomError("config_lock_timeout", "must be an integer from 0 to 3600")
+    return value
+
+
 def _log_level(value: Any) -> str:
     if not isinstance(value, str) or value.strip().upper() not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
         raise PydanticCustomError("config_log_level", "must be DEBUG, INFO, WARNING, ERROR, or CRITICAL")
@@ -34,12 +43,14 @@ def _log_level(value: Any) -> str:
 AbsolutePath = Annotated[Path, BeforeValidator(_absolute_path)]
 NonnegativeInteger = Annotated[int, BeforeValidator(_nonnegative_integer)]
 LogLevel = Annotated[str, AfterValidator(_log_level)]
+LockTimeoutSeconds = Annotated[int, BeforeValidator(_lock_timeout_seconds)]
 
 _SAFE_ERROR_MESSAGES = {
     "config_absolute_path": "must be an absolute Path",
     "config_path_nul": "must not contain NUL characters",
     "config_nonnegative_integer": "must be a nonnegative integer",
     "config_log_level": "must be DEBUG, INFO, WARNING, ERROR, or CRITICAL",
+    "config_lock_timeout": "must be an integer from 0 to 3600",
     "extra_forbidden": "unknown configuration field",
     "missing": "is required",
     "model_type": "must be a valid dictionary or model",

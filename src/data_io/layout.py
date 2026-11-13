@@ -15,6 +15,7 @@ import os
 import re
 import stat
 import tempfile
+import time
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -84,17 +85,25 @@ def _mkdir(parent: Path, name: str) -> Path:
 
 
 @contextmanager
-def _lock(root: Path) -> Iterator[None]:
+def _lock(root: Path, timeout_seconds: int = 0) -> Iterator[None]:
     path = root / ".writer.lock"
     fd = None
     try:
         fd = os.open(path, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
         if not stat.S_ISREG(os.fstat(fd).st_mode) or path.is_symlink():
             raise WriteBoundaryError(f"Writer lock must be a regular file: {path}")
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise WriteBoundaryError(f"Writer lock is held by another process: {path}") from exc
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError as exc:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise WriteBoundaryError(
+                        f"Writer lock is held by another process: {path} (waited {timeout_seconds}s)"
+                    ) from exc
+                time.sleep(min(0.05, remaining))
         yield
     finally:
         if fd is not None:
@@ -340,33 +349,37 @@ def _recover_partials(root: Path) -> None:
 @dataclass(frozen=True)
 class DataLayout:
     root: Path
+    lock_timeout_seconds: int = 0
 
     @classmethod
-    def create(cls, root: Path) -> DataLayout:
+    def create(cls, root: Path, *, lock_timeout_seconds: int = 0) -> DataLayout:
+        if type(lock_timeout_seconds) is not int or not 0 <= lock_timeout_seconds <= 3600:
+            raise WriteBoundaryError("lock_timeout_seconds must be an integer from 0 to 3600")
         try:
             resolved_root = root.resolve(strict=True)
             if not resolved_root.is_dir():
                 raise WriteBoundaryError(f"Data root is not a directory: {resolved_root}")
-            with _lock(resolved_root):
+            with _lock(resolved_root, lock_timeout_seconds):
                 for role in WriterRole:
                     _require_same_device(resolved_root, _mkdir(resolved_root, role.value))
                 _require_same_device(resolved_root, _mkdir(resolved_root, "recovery"))
                 _repair_recovery_metadata(resolved_root)
                 _recover_partials(resolved_root)
-            return cls(root=resolved_root)
+            return cls(root=resolved_root, lock_timeout_seconds=lock_timeout_seconds)
         except OSError as exc:
             raise WriteBoundaryError(f"Cannot create data layout at {root}: {exc}") from exc
 
     def writer(self, role: WriterRole) -> ScopedWriter:
         if not isinstance(role, WriterRole):
             raise TypeError("Writer role must be a WriterRole value.")
-        return ScopedWriter(root=self.root, role=role)
+        return ScopedWriter(root=self.root, role=role, lock_timeout_seconds=self.lock_timeout_seconds)
 
 
 @dataclass(frozen=True)
 class ScopedWriter:
     root: Path
     role: WriterRole
+    lock_timeout_seconds: int = 0
 
     def write_new(self, path: str | Path, payload: bytes, *, receipt_id: str | None = None) -> Path:
         # Boundary checks protect cooperative processes, not hostile concurrent
@@ -394,7 +407,7 @@ class ScopedWriter:
                     "and be the file's direct parent directory"
                 )
         try:
-            with _lock(self.root):
+            with _lock(self.root, self.lock_timeout_seconds):
                 return self._write_locked(relative, payload)
         except OSError as exc:
             raise WriteBoundaryError(f"Write failed for {relative}: {exc}") from exc

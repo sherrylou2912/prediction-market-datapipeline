@@ -461,3 +461,29 @@ def test_corrupt_partial_metadata_is_rejected_without_modifying_evidence(tmp_pat
         DataLayout.create(root)
     assert sidecar.read_text() == altered
     assert payload.read_bytes() == b"evidence"
+
+
+def test_lock_timeout_waits_then_fails_or_succeeds(tmp_path: Path) -> None:
+    import threading
+    import time
+
+    DataLayout.create(tmp_path)
+    with pytest.raises(WriteBoundaryError, match="lock_timeout_seconds"):
+        DataLayout.create(tmp_path, lock_timeout_seconds=-1)
+    with (tmp_path / ".writer.lock").open("r+") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        start = time.monotonic()
+        with pytest.raises(WriteBoundaryError, match="waited 1s"):
+            DataLayout.create(tmp_path, lock_timeout_seconds=1)
+        assert time.monotonic() - start >= 0.9
+        threading.Timer(0.2, lambda: fcntl.flock(lock.fileno(), fcntl.LOCK_UN)).start()
+        layout = DataLayout.create(tmp_path, lock_timeout_seconds=2)
+    assert layout.writer(WriterRole.NORMALIZER).lock_timeout_seconds == 2
+
+
+@pytest.mark.parametrize("value", ["-1", "3601", "abc", "1.5"])
+def test_invalid_lock_timeout_environment_rejected(tmp_path: Path, value: str) -> None:
+    from src.config import ConfigError, PipelineConfig
+
+    with pytest.raises(ConfigError, match="PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS"):
+        PipelineConfig.load(environ={"DATA_ROOT": str(tmp_path), "PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS": value})

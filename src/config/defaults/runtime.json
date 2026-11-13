@@ -1,3 +1,4 @@
 {
-  "log_level": "INFO"
+  "log_level": "INFO",
+  "writer_lock_timeout_seconds": 0
 }
