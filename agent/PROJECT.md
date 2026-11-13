@@ -4,7 +4,7 @@
 
 This document describes the project and planned PRs, not proof of implementation or current external API behavior. Verify the active branch, worktree, actual code, tests, and relevant current source documentation before making status claims. Use `agent/AGENTS.md` for shared rules and the role guides in `agent/` for the current task.
 
-负责人确认的 PR1 基础规则和实现边界见 [`docs/pr1/FOUNDATION_RULES.md`](../docs/pr1/FOUNDATION_RULES.md)。该文档补充本总览；如果两者发生冲突，以本总览为准，并在实施前与负责人确认修正。
+负责人确认的数据基础规则见 [`docs/FOUNDATION_RULES.md`](../docs/FOUNDATION_RULES.md)。该文档补充本总览；如果两者发生冲突，以本总览为准，并在实施前与负责人确认修正。
 
 ## 1. Goal & v1 Boundaries
 

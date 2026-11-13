@@ -1,18 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.1.0 — 2026-11-13
+
+First version of the pipeline foundation (PR #1). No venue data is downloaded yet.
 
 ### Added
 
-- Add `python -m src check`, a non-writing configuration check, and structured JSON logging for pipeline commands. `check` logs every effective non-secret setting with its source and a SHA-256 of the values (`config.effective`); run-record persistence remains PR2 work.
-- Add versioned Bronze, Silver, and Gold row contracts, including `gold.market_1m`, with `validate_record` and `arrow_schema` APIs. Generate field documentation from the JSON registry.
-- Add a network-free venue adapter and mock implementation, including Bronze provenance and explicit normalization failures. Adapters may declare no API version (`None`) instead of inventing one; Bronze records route by exact venue/API/protocol identity before envelope validation and content parsing. Validation rules come from the shared contracts instead of a per-adapter declaration. Read-only mapping proxies over plain dicts normalize like dicts; other mapping types are kept as original-reference evidence. Evidence is copied before routing.
-- Add the `recovery/` area for conflicting writes and abandoned partial files, with checksums and recovery metadata. Coordinate cooperating writers with a lock file that fails immediately when held. Recovery metadata must record its recovery path and completion check.
-- Document the foundation decisions in ADR-002 and describe the boundary between row-level contracts and future dataset validation.
+- `python -m src check`: validates configuration without writing data and logs each effective non-secret setting with its source and a SHA-256 of the values (`config.effective`).
+- Shared configuration validated with pydantic: `DATA_ROOT`, `DATA_MIN_FREE_GIB`, `PIPELINE_LOG_LEVEL`, `PIPELINE_CONFIG_DIR`. Errors never echo input values. Read and write jobs use separate preflight checks; write jobs check free space, write access and hard-link support first.
+- Data layout under `DATA_ROOT` with one writer per layer (`imports`, `bronze`, `silver`, `gold`, `quarantine`, `manifests`) plus `recovery/`. Files are published without overwriting and synced to disk; conflicting or interrupted writes are kept in `recovery/` with metadata. A writer lock fails immediately when held.
+- Data contracts version 7.0.0 for 14 datasets (1 Bronze, 8 Silver, 5 Gold), declared in `src/data_schema/schema_registry.json` and enforced by `validate_record`. `docs/SCHEMAS.md` is generated from the registry.
+- `VenueAdapter` interface and a network-free mock adapter. Records are routed by venue, API version and protocol version; normalization failures keep the original evidence.
+- Structured JSON logging for pipeline commands.
 
 ### Changed
 
-- Validate shared configuration with pydantic, distinguish read and write preflight checks, and check hard-link support before write jobs.
-- Use scoped writer boundaries per data layer. Publish without replacement, synchronize file and parent directory, and preserve conflicting evidence for review.
-- Upgrade contracts to schema version 7.0.0, require daily `as_of` to be no earlier than the start of its UTC day, declare row rules in JSON, preserve raw byte records, separate scheduled and actual market open/close times (keeping unclassified source time text verbatim), add optional source market/outcome descriptions and settlement rules, key outcomes by market, allow unknown settlement times, and use feature availability time for the first point-in-time check. A later training and backtest check will apply information delay.
-- Move the upstream analysis workflow and indexers off `main` to the branch `archive/upstream-main-2026-11-13`; `main` holds only the new pipeline and formal documents. Process records stay on PR working branches. Document configuration, recovery, and the limits of the current foundation.
+- `main` holds only the new pipeline and formal documents. The upstream analysis workflow and indexers are preserved on the branch `archive/upstream-main-2026-11-13`; dependencies used only by that code were removed.

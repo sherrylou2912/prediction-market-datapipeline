@@ -738,7 +738,6 @@ def test_malformed_identity_is_an_envelope_error_not_a_routing_error(changes: di
 
 @pytest.mark.parametrize("book", [False, True])
 def test_valid_readonly_envelope_normalizes_like_a_dict(book: bool) -> None:
-    # Owner decision (2026-11-13): a valid read-only proxy over a plain dict normalizes.
     adapter = MockVenueAdapter()
     payload = (
         {

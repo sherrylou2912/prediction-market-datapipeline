@@ -84,7 +84,7 @@ Planner prepares the brief and blocks using the owner's request and prior decisi
 - Bronze is immutable raw data; Silver is validated canonical data; Gold is a purpose-built product.
 - Use `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pytest tests/ -v` before delivery.
 - Legacy indexers and analysis code are not on `main`; they are preserved on `archive/upstream-main-2026-11-13`. Bring a piece into the v1 pipeline only through its migration PR, adapted to the adapter and writer interfaces.
-- Keep documentation in the layout described by `docs/README.md`: PR-specific formal rules under `docs/pr<N>/` and architecture decision records under `docs/adr/`. Add new documents to that index.
+- Keep documentation in the layout described by `docs/README.md`: long-term formal documents under `docs/`, architecture decision records under `docs/adr/`, and PR process records under `docs/pr<N>/` on the PR's working branch only. Add new formal documents to that index.
 - Keep `main` clean: it receives only pipeline code, tests, and formal documents through reviewed pull requests. Process records (`REVIEW_LOG.md`, `CODE_READING_PROGRESS.md`, plans, owner notes, superseded reports) stay on the PR's working branch, which is kept after merge as the audit trail; do not merge them into `main`.
 - Keep the new pipeline under `src/`; do not use a version number as the source folder name. Put settings and validation in `src/config/`, contracts in `src/data_schema/`, data directory and writer code in `src/data_io/`, and venue implementations in `src/adapters/`.
 
