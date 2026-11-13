@@ -1,18 +1,7 @@
-.PHONY: analyze run index package lint format test setup
+.PHONY: check lint format test
 
-RUN = uv run main.py
-
-analyze:
-	$(RUN) analyze
-
-run:
-	$(RUN) analyze $(filter-out $@,$(MAKECMDGOALS))
-
-index:
-	$(RUN) index
-
-package:
-	$(RUN) package
+check:
+	uv run python -m src check
 
 lint:
 	uv run ruff check .
@@ -24,10 +13,3 @@ format:
 
 test:
 	uv run pytest tests/ -v
-
-setup:
-	bash scripts/install-tools.sh
-	bash scripts/download.sh
-
-%:
-	@:

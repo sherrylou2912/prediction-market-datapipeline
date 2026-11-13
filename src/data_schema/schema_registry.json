@@ -1,0 +1,1899 @@
+{
+  "version": "7.0.0",
+  "version_field": "schema_version",
+  "datasets": {
+    "bronze.raw": {
+      "primary_key": [
+        "run_id",
+        "record_index"
+      ],
+      "fields": {
+        "run_id": {
+          "type": "str",
+          "description": "接收运行的唯一标识。"
+        },
+        "record_index": {
+          "type": "int",
+          "description": "运行内接收记录序号，从 0 开始。"
+        },
+        "venue": {
+          "type": "str?",
+          "description": "来源交易场所标识；不适用或未知时为空。"
+        },
+        "source": {
+          "type": "str",
+          "description": "原始数据来源标识。"
+        },
+        "message_type": {
+          "type": "str",
+          "description": "来源消息类型。"
+        },
+        "source_event_id": {
+          "type": "str?",
+          "description": "来源提供的事件标识；未知时为空。"
+        },
+        "event_time": {
+          "type": "utc_datetime?",
+          "description": "来源事件发生的 UTC 时间；未知时为空。"
+        },
+        "received_at": {
+          "type": "utc_datetime?",
+          "description": "本系统接收来源记录的 UTC 时间；未知时为空。"
+        },
+        "ingested_at": {
+          "type": "utc_datetime?",
+          "description": "原始记录写入的 UTC 时间；未知时为空。"
+        },
+        "sequence": {
+          "type": "int?",
+          "description": "来源序列号；未提供时为空。"
+        },
+        "api_version": {
+          "type": "str?",
+          "description": "来源 API 版本；不适用或未知时为空。"
+        },
+        "protocol_version": {
+          "type": "str?",
+          "description": "来源协议版本；不适用时为空。"
+        },
+        "schema_version": {
+          "type": "str",
+          "description": "本行使用的数据契约版本。"
+        },
+        "raw_payload": {
+          "type": "json?",
+          "description": "来源消息的 JSON 原文；与 raw_bytes 恰好填写一个。"
+        },
+        "raw_bytes": {
+          "type": "binary?",
+          "description": "来源原始字节，可含非 JSON、无效编码或空内容；与 raw_payload 恰好填写一个。"
+        }
+      },
+      "rules": [
+        {
+          "type": "version",
+          "field": "schema_version"
+        },
+        {
+          "type": "range",
+          "field": "record_index",
+          "min": "0"
+        },
+        {
+          "type": "range",
+          "field": "sequence",
+          "min": "0"
+        },
+        {
+          "type": "exactly_one_present",
+          "left": "raw_payload",
+          "right": "raw_bytes"
+        }
+      ]
+    },
+    "silver.events": {
+      "primary_key": [
+        "venue",
+        "event_id",
+        "observed_at"
+      ],
+      "fields": {
+        "venue": {
+          "type": "str",
+          "description": "来源交易场所标识。"
+        },
+        "event_id": {
+          "type": "str",
+          "description": "来源事件标识。"
+        },
+        "title": {
+          "type": "str",
+          "description": "事件或市场标题。"
+        },
+        "observed_at": {
+          "type": "utc_datetime",
+          "description": "本系统观察到该值的 UTC 时间。"
+        },
+        "bronze_run_id": {
+          "type": "str",
+          "description": "对应 Bronze 记录的运行标识。"
+        },
+        "bronze_record_index": {
+          "type": "int",
+          "description": "对应 Bronze 记录在运行中的序号。"
+        },
+        "schema_version": {
+          "type": "str",
+          "description": "本行使用的数据契约版本。"
+        }
+      },
+      "rules": [
+        {
+          "type": "version",
+          "field": "schema_version"
+        },
+        {
+          "type": "range",
+          "field": "bronze_record_index",
+          "min": "0"
+        }
+      ]
+    },
+    "silver.markets": {
+      "primary_key": [
+        "venue",
+        "market_id",
+        "observed_at"
+      ],
+      "fields": {
+        "venue": {
+          "type": "str",
+          "description": "来源交易场所标识。"
+        },
+        "market_id": {
+          "type": "str",
+          "description": "来源市场标识。"
+        },
+        "event_id": {
+          "type": "str?",
+          "description": "来源事件标识。"
+        },
+        "title": {
+          "type": "str",
+          "description": "事件或市场标题。"
+        },
+        "description": {
+          "type": "str?",
+          "description": "来源提供的市场描述原文；来源未提供时为空。"
+        },
+        "settlement_rules": {
+          "type": "str?",
+          "description": "来源提供的结算条件原文；来源未提供时为空。"
+        },
+        "status": {
+          "type": "str",
+          "description": "市场状态：pending、open、closed、settled、cancelled 或 unknown。"
+        },
+        "scheduled_open_at": {
+          "type": "utc_datetime?",
+          "description": "来源公布的计划开放 UTC 时间；未提供或来源未区分计划与实际时为空，原文见 source_open_time_text / source_close_time_text。"
+        },
+        "scheduled_close_at": {
+          "type": "utc_datetime?",
+          "description": "来源公布的计划关闭 UTC 时间；未提供或来源未区分计划与实际时为空，原文见 source_open_time_text / source_close_time_text。"
+        },
+        "actual_open_at": {
+          "type": "utc_datetime?",
+          "description": "有可靠证据的实际开放 UTC 时间；无证据或来源未区分计划与实际时为空，原文见 source_open_time_text / source_close_time_text。"
+        },
+        "actual_close_at": {
+          "type": "utc_datetime?",
+          "description": "有可靠证据的实际关闭 UTC 时间；无证据或来源未区分计划与实际时为空，原文见 source_open_time_text / source_close_time_text。"
+        },
+        "source_open_time_text": {
+          "type": "str?",
+          "description": "来源提供但未说明属于计划还是实际的开放时间原文，按原样保存、不解析；来源已明确区分或未提供时为空。"
+        },
+        "source_close_time_text": {
+          "type": "str?",
+          "description": "来源提供但未说明属于计划还是实际的关闭时间原文，按原样保存、不解析；来源已明确区分或未提供时为空。"
+        },
+        "observed_at": {
+          "type": "utc_datetime",
+          "description": "本系统观察到该值的 UTC 时间。"
+        },
+        "bronze_run_id": {
+          "type": "str",
+          "description": "对应 Bronze 记录的运行标识。"
+        },
+        "bronze_record_index": {
+          "type": "int",
+          "description": "对应 Bronze 记录在运行中的序号。"
+        },
+        "schema_version": {
+          "type": "str",
+          "description": "本行使用的数据契约版本。"
+        }
+      },
+      "rules": [
+        {
+          "type": "version",
+          "field": "schema_version"
+        },
+        {
+          "type": "range",
+          "field": "bronze_record_index",
+          "min": "0"
+        },
+        {
+          "type": "enum",
+          "field": "status",
+          "values": [
+            "pending",
+            "open",
+            "closed",
+            "settled",
+            "cancelled",
+            "unknown"
+          ]
+        },
+        {
+          "type": "compare",
+          "left": "scheduled_open_at",
+          "op": "<=",
+          "right": "scheduled_close_at"
+        },
+        {
+          "type": "compare",
+          "left": "actual_open_at",
+          "op": "<=",
+          "right": "actual_close_at"
+        }
+      ]
+    },
+    "silver.outcomes": {
+      "primary_key": [
+        "venue",
+        "market_id",
+        "outcome_id",
+        "observed_at"
+      ],
+      "fields": {
+        "venue": {
+          "type": "str",
+          "description": "来源交易场所标识。"
+        },
+        "outcome_id": {
+          "type": "str",
+          "description": "来源 outcome 标识。"
+        },
+        "market_id": {
+          "type": "str",
+          "description": "来源市场标识。"
+        },
+        "label": {
+          "type": "str",
+          "description": "outcome 的非空显示名称。"
+        },
+        "description": {
+          "type": "str?",
+          "description": "来源提供的 outcome 说明原文；来源未提供时为空。"
+        },
+        "observed_at": {
+          "type": "utc_datetime",
+          "description": "本系统观察到该值的 UTC 时间。"
+        },
+        "bronze_run_id": {
+          "type": "str",
+          "description": "对应 Bronze 记录的运行标识。"
+        },
+        "bronze_record_index": {
+          "type": "int",
+          "description": "对应 Bronze 记录在运行中的序号。"
+        },
+        "schema_version": {
+          "type": "str",
+          "description": "本行使用的数据契约版本。"
+        }
+      },
+      "rules": [
+        {
+          "type": "version",
+          "field": "schema_version"
+        },
+        {
+          "type": "range",
+          "field": "bronze_record_index",
+          "min": "0"
+        }
+      ]
+    },
+    "silver.market_states": {
+      "primary_key": [
+        "venue",
+        "market_id",
+        "observed_at"
+      ],
+      "fields": {
+        "venue": {
+          "type": "str",
+          "description": "来源交易场所标识。"
+        },
+        "market_id": {
+          "type": "str",
+          "description": "来源市场标识。"
+        },
+        "status": {
+          "type": "str",
+          "description": "市场状态：pending、open、closed、settled、cancelled 或 unknown。"
+        },
+        "best_bid": {
+          "type": "decimal?",
+          "description": "观察窗口内的最佳买价，概率单位。"
+        },
+        "best_ask": {
+          "type": "decimal?",
+          "description": "观察窗口内的最佳卖价，概率单位。"
+        },
+        "observed_at": {
+          "type": "utc_datetime",
+          "description": "本系统观察到该值的 UTC 时间。"
+        },
+        "bronze_run_id": {
+          "type": "str",
+          "description": "对应 Bronze 记录的运行标识。"
+        },
+        "bronze_record_index": {
+          "type": "int",
+          "description": "对应 Bronze 记录在运行中的序号。"
+        },
+        "schema_version": {
+          "type": "str",
+          "description": "本行使用的数据契约版本。"
+        }
+      },
+      "rules": [
+        {
+          "type": "version",
+          "field": "schema_version"
+        },
+        {
+          "type": "range",
+          "field": "best_bid",
+          "min": "0",
+          "max": "1"
+        },
+        {
+          "type": "range",
+          "field": "best_ask",
+          "min": "0",
+          "max": "1"
+        },
+        {
+          "type": "range",
+          "field": "bronze_record_index",
+          "min": "0"
+        },
+        {
+          "type": "enum",
+          "field": "status",
+          "values": [
+            "pending",
+            "open",
+            "closed",
+            "settled",
+            "cancelled",
+            "unknown"
+          ]
+        },
+        {
+          "type": "compare",
+          "left": "best_bid",
+          "op": "<=",
+          "right": "best_ask"
+        }
+      ]
+    },
+    "silver.trades": {
+      "primary_key": [
+        "venue",
+        "trade_id"
+      ],
+      "fields": {
+        "venue": {
+          "type": "str",
+          "description": "来源交易场所标识。"
+        },
+        "trade_id": {
+          "type": "str",
+          "description": "来源成交标识。"
+        },
+        "market_id": {
+          "type": "str",
+          "description": "来源市场标识。"
+        },
+        "outcome_id": {
+          "type": "str?",
+          "description": "来源 outcome 标识。"
+        },
+        "price": {
+          "type": "decimal",
+          "description": "价格，概率单位，范围 0 至 1。"
+        },
+        "quantity": {
+          "type": "decimal",
+          "description": "数量，份数。"
+        },
+        "taker_side": {
+          "type": "str?",
+          "description": "主动成交方：buy 或 sell；未知时为空。"
+        },
+        "event_time": {
+          "type": "utc_datetime?",
+          "description": "来源事件发生的 UTC 时间；未知时为空。"
+        },
+        "observed_at": {
+          "type": "utc_datetime",
+          "description": "本系统观察到该值的 UTC 时间。"
+        },
+        "bronze_run_id": {
+          "type": "str",
+          "description": "对应 Bronze 记录的运行标识。"
+        },
+        "bronze_record_index": {
+          "type": "int",
+          "description": "对应 Bronze 记录在运行中的序号。"
+        },
+        "schema_version": {
+          "type": "str",
+          "description": "本行使用的数据契约版本。"
+        }
+      },
+      "rules": [
+        {
+          "type": "version",
+          "field": "schema_version"
+        },
+        {
+          "type": "range",
+          "field": "price",
+          "min": "0",
+          "max": "1"
+        },
+        {
+          "type": "range",
+          "field": "quantity",
+          "min": "0"
+        },
+        {
+          "type": "range",
+          "field": "bronze_record_index",
+          "min": "0"
+        },
+        {
+          "type": "enum",
+          "field": "taker_side",
+          "values": [
+            "buy",
+            "sell"
+          ]
+        }
+      ]
+    },
+    "silver.book_snapshots": {
+      "primary_key": [
+        "venue",
+        "snapshot_id"
+      ],
+      "fields": {
+        "venue": {
+          "type": "str",
+          "description": "来源交易场所标识。"
+        },
+        "snapshot_id": {
+          "type": "str",
+          "description": "来源盘口快照标识。"
+        },
+        "market_id": {
+          "type": "str",
+          "description": "来源市场标识。"
+        },
+        "outcome_id": {
+          "type": "str",
+          "description": "来源 outcome 标识。"
+        },
+        "source_sequence": {
+          "type": "int?",
+          "description": "来源盘口序列号；未提供时为空。"
+        },
+        "bids": {
+          "type": "json",
+          "description": "买盘档位 JSON 数组；每档为 price 和 quantity 字段组成的对象，价格 0 至 1，数量非负，值为十进制数字或十进制字符串。"
+        },
+        "asks": {
+          "type": "json",
+          "description": "卖盘档位 JSON 数组；每档为 price 和 quantity 字段组成的对象，价格 0 至 1，数量非负，值为十进制数字或十进制字符串。"
+        },
+        "event_time": {
+          "type": "utc_datetime?",
+          "description": "来源事件发生的 UTC 时间；未知时为空。"
+        },
+        "received_at": {
+          "type": "utc_datetime",
+          "description": "本系统接收来源记录的 UTC 时间。"
+        },
+        "recovery": {
+          "type": "bool",
+          "description": "快照用于断线或序列缺口后的恢复，或该秒处于恢复状态时为 true。"
+        },
+        "bronze_run_id": {
+          "type": "str",
+          "description": "对应 Bronze 记录的运行标识。"
+        },
+        "bronze_record_index": {
+          "type": "int",
+          "description": "对应 Bronze 记录在运行中的序号。"
+        },
+        "schema_version": {
+          "type": "str",
+          "description": "本行使用的数据契约版本。"
+        }
+      },
+      "rules": [
+        {
+          "type": "version",
+          "field": "schema_version"
+        },
+        {
+          "type": "range",
+          "field": "source_sequence",
+          "min": "0"
+        },
+        {
+          "type": "range",
+          "field": "bronze_record_index",
+          "min": "0"
+        },
+        {
+          "type": "book_levels",
+          "field": "bids"
+        },
+        {
+          "type": "book_levels",
+          "field": "asks"
+        },
+        {
+          "type": "unique_json_keys",
+          "field": "bids"
+        },
+        {
+          "type": "unique_json_keys",
+          "field": "asks"
+        }
+      ]
+    },
+    "silver.book_deltas": {
+      "primary_key": [
+        "venue",
+        "delta_id"
+      ],
+      "fields": {
+        "venue": {
+          "type": "str",
+          "description": "来源交易场所标识。"
+        },
+        "delta_id": {
+          "type": "str",
+          "description": "来源盘口变动标识。"
+        },
+        "market_id": {
+          "type": "str",
+          "description": "来源市场标识。"
+        },
+        "outcome_id": {
+          "type": "str",
+          "description": "来源 outcome 标识。"
+        },
+        "source_sequence": {
+          "type": "int?",
+          "description": "来源盘口序列号；未提供时为空。"
+        },
+        "side": {
+          "type": "str",
+          "description": "盘口方向：bid 或 ask。"
+        },
+        "price": {
+          "type": "decimal",
+          "description": "价格，概率单位，范围 0 至 1。"
+        },
+        "quantity": {
+          "type": "decimal",
+          "description": "数量，份数。"
+        },
+        "event_time": {
+          "type": "utc_datetime?",
+          "description": "来源事件发生的 UTC 时间；未知时为空。"
+        },
+        "received_at": {
+          "type": "utc_datetime",
+          "description": "本系统接收来源记录的 UTC 时间。"
+        },
+        "bronze_run_id": {
+          "type": "str",
+          "description": "对应 Bronze 记录的运行标识。"
+        },
+        "bronze_record_index": {
+          "type": "int",
+          "description": "对应 Bronze 记录在运行中的序号。"
+        },
+        "schema_version": {
+          "type": "str",
+          "description": "本行使用的数据契约版本。"
+        }
+      },
+      "rules": [
+        {
+          "type": "version",
+          "field": "schema_version"
+        },
+        {
+          "type": "range",
+          "field": "price",
+          "min": "0",
+          "max": "1"
+        },
+        {
+          "type": "range",
+          "field": "source_sequence",
+          "min": "0"
+        },
+        {
+          "type": "range",
+          "field": "quantity",
+          "min": "0"
+        },
+        {
+          "type": "range",
+          "field": "bronze_record_index",
+          "min": "0"
+        },
+        {
+          "type": "enum",
+          "field": "side",
+          "values": [
+            "bid",
+            "ask"
+          ]
+        }
+      ]
+    },
+    "silver.settlements": {
+      "primary_key": [
+        "venue",
+        "market_id",
+        "outcome_id",
+        "observed_at"
+      ],
+      "fields": {
+        "venue": {
+          "type": "str",
+          "description": "来源交易场所标识。"
+        },
+        "market_id": {
+          "type": "str",
+          "description": "来源市场标识。"
+        },
+        "outcome_id": {
+          "type": "str",
+          "description": "来源 outcome 标识。"
+        },
+        "payout": {
+          "type": "decimal",
+          "description": "每份结算支付金额，范围 0 至 1。"
+        },
+        "settled_at": {
+          "type": "utc_datetime?",
+          "description": "来源结算 UTC 时间；来源未提供时为空，不以观察时间或其他时间代替；依赖结算时刻的检查和研究不得把空值当作已确认时间。"
+        },
+        "observed_at": {
+          "type": "utc_datetime",
+          "description": "本系统观察到该值的 UTC 时间。"
+        },
+        "bronze_run_id": {
+          "type": "str",
+          "description": "对应 Bronze 记录的运行标识。"
+        },
+        "bronze_record_index": {
+          "type": "int",
+          "description": "对应 Bronze 记录在运行中的序号。"
+        },
+        "schema_version": {
+          "type": "str",
+          "description": "本行使用的数据契约版本。"
+        }
+      },
+      "rules": [
+        {
+          "type": "version",
+          "field": "schema_version"
+        },
+        {
+          "type": "range",
+          "field": "payout",
+          "min": "0",
+          "max": "1"
+        },
+        {
+          "type": "range",
+          "field": "bronze_record_index",
+          "min": "0"
+        }
+      ]
+    },
+    "gold.market_daily": {
+      "primary_key": [
+        "venue",
+        "market_id",
+        "day",
+        "as_of"
+      ],
+      "fields": {
+        "venue": {
+          "type": "str",
+          "description": "来源交易场所标识。"
+        },
+        "market_id": {
+          "type": "str",
+          "description": "来源市场标识。"
+        },
+        "day": {
+          "type": "str",
+          "description": "UTC 日历日期，格式 YYYY-MM-DD。"
+        },
+        "volume": {
+          "type": "decimal?",
+          "description": "成交份数；确认无成交时为 0，未知时为空。"
+        },
+        "trade_count": {
+          "type": "int?",
+          "description": "成交笔数；确认无成交时为 0，未知时为空。"
+        },
+        "as_of": {
+          "type": "utc_datetime",
+          "description": "计算结果截至的 UTC 可用时间；不得早于 day 的 UTC 零点，可早于当日结束（日内部分汇总的完整性由覆盖规则判断）。"
+        },
+        "source_manifest_ids": {
+          "type": "json",
+          "description": "输入 manifest 标识组成的非空 JSON 数组；详细覆盖和问题由 manifest 及关联记录追溯。"
+        },
+        "schema_version": {
+          "type": "str",
+          "description": "本行使用的数据契约版本。"
+        }
+      },
+      "rules": [
+        {
+          "type": "version",
+          "field": "schema_version"
+        },
+        {
+          "type": "range",
+          "field": "volume",
+          "min": "0"
+        },
+        {
+          "type": "range",
+          "field": "trade_count",
+          "min": "0"
+        },
+        {
+          "type": "conditional_value",
+          "when": "trade_count",
+          "equals": 0,
+          "field": "volume",
+          "value": "0",
+          "allow_null": true
+        },
+        {
+          "type": "iso_date",
+          "field": "day"
+        },
+        {
+          "type": "string_array",
+          "field": "source_manifest_ids",
+          "nonempty": true
+        },
+        {
+          "type": "unique_json_keys",
+          "field": "source_manifest_ids"
+        },
+        {
+          "type": "day_start",
+          "field": "as_of",
+          "day": "day"
+        }
+      ]
+    },
+    "gold.market_1s": {
+      "primary_key": [
+        "venue",
+        "market_id",
+        "outcome_id",
+        "second"
+      ],
+      "fields": {
+        "venue": {
+          "type": "str",
+          "description": "来源交易场所标识。"
+        },
+        "market_id": {
+          "type": "str",
+          "description": "来源市场标识。"
+        },
+        "outcome_id": {
+          "type": "str",
+          "description": "来源 outcome 标识。"
+        },
+        "second": {
+          "type": "utc_datetime",
+          "description": "UTC 整秒窗口起点。"
+        },
+        "best_bid": {
+          "type": "decimal?",
+          "description": "观察窗口内的最佳买价，概率单位。"
+        },
+        "best_ask": {
+          "type": "decimal?",
+          "description": "观察窗口内的最佳卖价，概率单位。"
+        },
+        "spread": {
+          "type": "decimal?",
+          "description": "最佳卖价减最佳买价；缺任一报价时为空。"
+        },
+        "mid": {
+          "type": "decimal?",
+          "description": "最佳买卖价的算术平均，以十位小数按四舍六入五成双取整；缺报价时为空。"
+        },
+        "microprice": {
+          "type": "decimal?",
+          "description": "微价格：(最佳卖价 × 最佳买量 + 最佳买价 × 最佳卖量) / (最佳买量 + 最佳卖量)；缺少输入或分母为零时为空。"
+        },
+        "bid_depth_top_n": {
+          "type": "decimal?",
+          "description": "买盘前 N 档挂单份数之和；N 由特征参数决定。"
+        },
+        "ask_depth_top_n": {
+          "type": "decimal?",
+          "description": "卖盘前 N 档挂单份数之和；N 由特征参数决定。"
+        },
+        "imbalance": {
+          "type": "decimal?",
+          "description": "盘口不平衡度：(买盘前 N 档份数 − 卖盘前 N 档份数) / (两侧前 N 档份数之和)；N 由特征参数决定，分母为零时为空。"
+        },
+        "last_trade_price": {
+          "type": "decimal?",
+          "description": "最近一笔成交价格，概率单位；未知时为空。"
+        },
+        "rolling_volume": {
+          "type": "decimal?",
+          "description": "滚动成交份数，窗口长度由特征参数决定；缺少成交数据时为空，确认无成交时为 0。"
+        },
+        "update_count": {
+          "type": "int",
+          "description": "该秒盘口更新次数。"
+        },
+        "book_age_ms": {
+          "type": "int?",
+          "description": "窗口时点距离最近一次可靠盘口更新的时间，毫秒；未知时为空。"
+        },
+        "receive_latency_ms": {
+          "type": "int?",
+          "description": "来源事件时间至本系统接收时间的延迟，毫秒；未知时为空。"
+        },
+        "gap": {
+          "type": "bool",
+          "description": "该秒存在已知序列缺口或不可靠盘口时为 true。"
+        },
+        "recovery": {
+          "type": "bool",
+          "description": "快照用于断线或序列缺口后的恢复，或该秒处于恢复状态时为 true。"
+        },
+        "as_of": {
+          "type": "utc_datetime",
+          "description": "窗口汇总结果的可用 UTC 时间；不得早于窗口结束，并须如实反映实际输入和结果的较晚可用时间。"
+        },
+        "source_manifest_ids": {
+          "type": "json",
+          "description": "输入 manifest 标识组成的非空 JSON 数组；详细覆盖和问题由 manifest 及关联记录追溯。"
+        },
+        "schema_version": {
+          "type": "str",
+          "description": "本行使用的数据契约版本。"
+        }
+      },
+      "rules": [
+        {
+          "type": "version",
+          "field": "schema_version"
+        },
+        {
+          "type": "range",
+          "field": "best_bid",
+          "min": "0",
+          "max": "1"
+        },
+        {
+          "type": "range",
+          "field": "best_ask",
+          "min": "0",
+          "max": "1"
+        },
+        {
+          "type": "range",
+          "field": "mid",
+          "min": "0",
+          "max": "1"
+        },
+        {
+          "type": "range",
+          "field": "microprice",
+          "min": "0",
+          "max": "1"
+        },
+        {
+          "type": "range",
+          "field": "last_trade_price",
+          "min": "0",
+          "max": "1"
+        },
+        {
+          "type": "range",
+          "field": "spread",
+          "min": "0"
+        },
+        {
+          "type": "range",
+          "field": "bid_depth_top_n",
+          "min": "0"
+        },
+        {
+          "type": "range",
+          "field": "ask_depth_top_n",
+          "min": "0"
+        },
+        {
+          "type": "range",
+          "field": "rolling_volume",
+          "min": "0"
+        },
+        {
+          "type": "range",
+          "field": "update_count",
+          "min": "0"
+        },
+        {
+          "type": "range",
+          "field": "book_age_ms",
+          "min": "0"
+        },
+        {
+          "type": "range",
+          "field": "receive_latency_ms",
+          "min": "0"
+        },
+        {
+          "type": "range",
+          "field": "imbalance",
+          "min": "-1",
+          "max": "1"
+        },
+        {
+          "type": "compare",
+          "left": "best_bid",
+          "op": "<=",
+          "right": "best_ask"
+        },
+        {
+          "type": "difference",
+          "result": "spread",
+          "left": "best_ask",
+          "right": "best_bid"
+        },
+        {
+          "type": "alignment",
+          "field": "second",
+          "unit": "second"
+        },
+        {
+          "type": "string_array",
+          "field": "source_manifest_ids",
+          "nonempty": true
+        },
+        {
+          "type": "window_end",
+          "field": "as_of",
+          "start": "second",
+          "unit": "second"
+        },
+        {
+          "type": "requires_present",
+          "field": "spread",
+          "required": "best_bid"
+        },
+        {
+          "type": "requires_present",
+          "field": "spread",
+          "required": "best_ask"
+        },
+        {
+          "type": "unique_json_keys",
+          "field": "source_manifest_ids"
+        },
+        {
+          "type": "requires_present",
+          "field": "mid",
+          "required": "best_bid"
+        },
+        {
+          "type": "requires_present",
+          "field": "mid",
+          "required": "best_ask"
+        },
+        {
+          "type": "rounded_mean",
+          "result": "mid",
+          "left": "best_bid",
+          "right": "best_ask",
+          "scale": 10
+        },
+        {
+          "type": "requires_present",
+          "field": "microprice",
+          "required": "best_bid"
+        },
+        {
+          "type": "requires_present",
+          "field": "microprice",
+          "required": "best_ask"
+        },
+        {
+          "type": "requires_present",
+          "field": "imbalance",
+          "required": "bid_depth_top_n"
+        },
+        {
+          "type": "requires_present",
+          "field": "imbalance",
+          "required": "ask_depth_top_n"
+        },
+        {
+          "type": "zero_pair_null",
+          "left": "bid_depth_top_n",
+          "right": "ask_depth_top_n",
+          "field": "imbalance"
+        }
+      ]
+    },
+    "gold.liquidity_features": {
+      "primary_key": [
+        "venue",
+        "market_id",
+        "outcome_id",
+        "observation_time"
+      ],
+      "fields": {
+        "venue": {
+          "type": "str",
+          "description": "来源交易场所标识。"
+        },
+        "market_id": {
+          "type": "str",
+          "description": "来源市场标识。"
+        },
+        "outcome_id": {
+          "type": "str",
+          "description": "来源 outcome 标识。"
+        },
+        "observation_time": {
+          "type": "utc_datetime",
+          "description": "特征观察或决策的 UTC 时间。"
+        },
+        "spread": {
+          "type": "decimal?",
+          "description": "最佳卖价减最佳买价；缺任一报价时为空。"
+        },
+        "depth_top_n": {
+          "type": "decimal?",
+          "description": "前 N 档挂单深度，份数；N 由特征参数决定。"
+        },
+        "imbalance": {
+          "type": "decimal?",
+          "description": "盘口不平衡度：(买盘前 N 档份数 − 卖盘前 N 档份数) / (两侧前 N 档份数之和)；N 由特征参数决定，分母为零时为空。"
+        },
+        "source_manifest_ids": {
+          "type": "json",
+          "description": "输入 manifest 标识组成的非空 JSON 数组；详细覆盖和问题由 manifest 及关联记录追溯。"
+        },
+        "schema_version": {
+          "type": "str",
+          "description": "本行使用的数据契约版本。"
+        }
+      },
+      "rules": [
+        {
+          "type": "version",
+          "field": "schema_version"
+        },
+        {
+          "type": "range",
+          "field": "spread",
+          "min": "0"
+        },
+        {
+          "type": "range",
+          "field": "depth_top_n",
+          "min": "0"
+        },
+        {
+          "type": "range",
+          "field": "imbalance",
+          "min": "-1",
+          "max": "1"
+        },
+        {
+          "type": "string_array",
+          "field": "source_manifest_ids",
+          "nonempty": true
+        },
+        {
+          "type": "unique_json_keys",
+          "field": "source_manifest_ids"
+        }
+      ]
+    },
+    "gold.training_datasets": {
+      "primary_key": [
+        "dataset_name",
+        "venue",
+        "market_id",
+        "observation_time"
+      ],
+      "fields": {
+        "dataset_name": {
+          "type": "str",
+          "description": "训练数据集名称。"
+        },
+        "venue": {
+          "type": "str",
+          "description": "来源交易场所标识。"
+        },
+        "market_id": {
+          "type": "str",
+          "description": "来源市场标识。"
+        },
+        "observation_time": {
+          "type": "utc_datetime",
+          "description": "特征观察或决策的 UTC 时间。"
+        },
+        "features": {
+          "type": "json",
+          "description": "训练特征组成的 JSON 对象。"
+        },
+        "label": {
+          "type": "decimal?",
+          "description": "训练标签值，概率单位，范围 0 至 1；未知时为空。"
+        },
+        "label_available_at": {
+          "type": "utc_datetime?",
+          "description": "标签可供使用的 UTC 时间；未知时为空。"
+        },
+        "source_manifest_ids": {
+          "type": "json",
+          "description": "输入 manifest 标识组成的非空 JSON 数组；详细覆盖和问题由 manifest 及关联记录追溯。"
+        },
+        "schema_version": {
+          "type": "str",
+          "description": "本行使用的数据契约版本。"
+        },
+        "max_feature_available_at": {
+          "type": "utc_datetime",
+          "description": "输入特征中最晚的可用 UTC 时间，即实际可供使用而非仅事件发生的时间；历史假设须经批准并记录。"
+        }
+      },
+      "rules": [
+        {
+          "type": "version",
+          "field": "schema_version"
+        },
+        {
+          "type": "range",
+          "field": "label",
+          "min": "0",
+          "max": "1"
+        },
+        {
+          "type": "compare",
+          "left": "max_feature_available_at",
+          "op": "<=",
+          "right": "observation_time"
+        },
+        {
+          "type": "compare",
+          "left": "observation_time",
+          "op": "<",
+          "right": "label_available_at"
+        },
+        {
+          "type": "string_array",
+          "field": "source_manifest_ids",
+          "nonempty": true
+        },
+        {
+          "type": "json_object",
+          "field": "features"
+        },
+        {
+          "type": "unique_json_keys",
+          "field": "features"
+        },
+        {
+          "type": "unique_json_keys",
+          "field": "source_manifest_ids"
+        }
+      ]
+    },
+    "gold.market_1m": {
+      "primary_key": [
+        "venue",
+        "market_id",
+        "outcome_id",
+        "minute"
+      ],
+      "fields": {
+        "venue": {
+          "type": "str",
+          "description": "来源交易场所标识。"
+        },
+        "market_id": {
+          "type": "str",
+          "description": "来源市场标识。"
+        },
+        "outcome_id": {
+          "type": "str",
+          "description": "来源 outcome 标识。"
+        },
+        "minute": {
+          "type": "utc_datetime",
+          "description": "UTC 整分钟窗口起点；窗口包含起点、不包含一分钟后的终点。"
+        },
+        "open": {
+          "type": "decimal?",
+          "description": "开盘成交价，概率单位；无法可靠计算时为空。"
+        },
+        "high": {
+          "type": "decimal?",
+          "description": "最高成交价，概率单位；无法可靠计算时为空。"
+        },
+        "low": {
+          "type": "decimal?",
+          "description": "最低成交价，概率单位；无法可靠计算时为空。"
+        },
+        "close": {
+          "type": "decimal?",
+          "description": "收盘成交价，概率单位；无法可靠计算时为空。"
+        },
+        "vwap": {
+          "type": "decimal?",
+          "description": "成交量加权平均成交价，概率单位；无法可靠计算时为空。"
+        },
+        "open_close_reason": {
+          "type": "str?",
+          "description": "开盘或收盘价无法可靠确定时的原因，例如同一时间成交顺序不明。"
+        },
+        "trade_data_status": {
+          "type": "str",
+          "description": "成交覆盖状态：observed、confirmed_no_trades 或 missing。"
+        },
+        "volume": {
+          "type": "decimal?",
+          "description": "成交份数；确认无成交时为 0，未知时为空。"
+        },
+        "trade_amount": {
+          "type": "decimal?",
+          "description": "成交金额；仅在来源单位支持可靠计算时填写，未知时为空。"
+        },
+        "trade_count": {
+          "type": "int?",
+          "description": "成交笔数；确认无成交时为 0，未知时为空。"
+        },
+        "bid_best_price": {
+          "type": "decimal?",
+          "description": "bid 侧最佳价格的持续时间加权分钟平均，概率单位；无可靠覆盖时为空。"
+        },
+        "bid_level_prices": {
+          "type": "json?",
+          "description": "bid 侧以正整数档位序号字符串为键、十进制字符串为值的 JSON 对象；价格（概率单位）的持续时间加权平均，未知档不填零。金额先逐时刻计算再加权。"
+        },
+        "bid_level_quantities": {
+          "type": "json?",
+          "description": "bid 侧以正整数档位序号字符串为键、十进制字符串为值的 JSON 对象；挂单份数的持续时间加权平均，未知档不填零。金额先逐时刻计算再加权。"
+        },
+        "bid_level_amounts": {
+          "type": "json?",
+          "description": "bid 侧以正整数档位序号字符串为键、十进制字符串为值的 JSON 对象；挂单金额的持续时间加权平均，未知档不填零。金额先逐时刻计算再加权。"
+        },
+        "bid_depth_top_n_quantity": {
+          "type": "decimal?",
+          "description": "bid 侧前 N 档份数之和的持续时间加权平均；N 由特征参数决定。"
+        },
+        "bid_depth_top_n_amount": {
+          "type": "decimal?",
+          "description": "bid 侧前 N 档金额之和的持续时间加权平均；N 由特征参数决定。"
+        },
+        "bid_observed_levels_avg": {
+          "type": "decimal?",
+          "description": "bid 侧实际观察档位数的持续时间加权平均。"
+        },
+        "bid_observed_levels_min": {
+          "type": "int?",
+          "description": "bid 侧实际观察档位数的最小值；覆盖不足不代表实际只有这些档。"
+        },
+        "bid_coverage_seconds": {
+          "type": "decimal?",
+          "description": "bid 侧可靠盘口覆盖时间，秒；未知时为空，详细问题由 manifest 关联。"
+        },
+        "ask_best_price": {
+          "type": "decimal?",
+          "description": "ask 侧最佳价格的持续时间加权分钟平均，概率单位；无可靠覆盖时为空。"
+        },
+        "ask_level_prices": {
+          "type": "json?",
+          "description": "ask 侧以正整数档位序号字符串为键、十进制字符串为值的 JSON 对象；价格（概率单位）的持续时间加权平均，未知档不填零。金额先逐时刻计算再加权。"
+        },
+        "ask_level_quantities": {
+          "type": "json?",
+          "description": "ask 侧以正整数档位序号字符串为键、十进制字符串为值的 JSON 对象；挂单份数的持续时间加权平均，未知档不填零。金额先逐时刻计算再加权。"
+        },
+        "ask_level_amounts": {
+          "type": "json?",
+          "description": "ask 侧以正整数档位序号字符串为键、十进制字符串为值的 JSON 对象；挂单金额的持续时间加权平均，未知档不填零。金额先逐时刻计算再加权。"
+        },
+        "ask_depth_top_n_quantity": {
+          "type": "decimal?",
+          "description": "ask 侧前 N 档份数之和的持续时间加权平均；N 由特征参数决定。"
+        },
+        "ask_depth_top_n_amount": {
+          "type": "decimal?",
+          "description": "ask 侧前 N 档金额之和的持续时间加权平均；N 由特征参数决定。"
+        },
+        "ask_observed_levels_avg": {
+          "type": "decimal?",
+          "description": "ask 侧实际观察档位数的持续时间加权平均。"
+        },
+        "ask_observed_levels_min": {
+          "type": "int?",
+          "description": "ask 侧实际观察档位数的最小值；覆盖不足不代表实际只有这些档。"
+        },
+        "ask_coverage_seconds": {
+          "type": "decimal?",
+          "description": "ask 侧可靠盘口覆盖时间，秒；未知时为空，详细问题由 manifest 关联。"
+        },
+        "spread": {
+          "type": "decimal?",
+          "description": "买卖双方同时有可靠报价时的价差持续时间加权平均，概率单位。"
+        },
+        "joint_coverage_seconds": {
+          "type": "decimal?",
+          "description": "买卖双方同时有可靠报价的覆盖时间，秒；未知时为空。"
+        },
+        "as_of": {
+          "type": "utc_datetime",
+          "description": "窗口汇总结果的可用 UTC 时间；不得早于窗口结束，并须如实反映实际输入和结果的较晚可用时间。"
+        },
+        "source_manifest_ids": {
+          "type": "json",
+          "description": "输入 manifest 标识组成的非空 JSON 数组；详细覆盖和问题由 manifest 及关联记录追溯。"
+        },
+        "schema_version": {
+          "type": "str",
+          "description": "本行使用的数据契约版本。"
+        }
+      },
+      "rules": [
+        {
+          "type": "version",
+          "field": "schema_version"
+        },
+        {
+          "type": "alignment",
+          "field": "minute",
+          "unit": "minute"
+        },
+        {
+          "type": "enum",
+          "field": "trade_data_status",
+          "values": [
+            "observed",
+            "confirmed_no_trades",
+            "missing"
+          ]
+        },
+        {
+          "type": "range",
+          "field": "open",
+          "min": "0",
+          "max": "1"
+        },
+        {
+          "type": "range",
+          "field": "high",
+          "min": "0",
+          "max": "1"
+        },
+        {
+          "type": "range",
+          "field": "low",
+          "min": "0",
+          "max": "1"
+        },
+        {
+          "type": "range",
+          "field": "close",
+          "min": "0",
+          "max": "1"
+        },
+        {
+          "type": "range",
+          "field": "vwap",
+          "min": "0",
+          "max": "1"
+        },
+        {
+          "type": "range",
+          "field": "bid_best_price",
+          "min": "0",
+          "max": "1"
+        },
+        {
+          "type": "range",
+          "field": "ask_best_price",
+          "min": "0",
+          "max": "1"
+        },
+        {
+          "type": "range",
+          "field": "volume",
+          "min": "0"
+        },
+        {
+          "type": "range",
+          "field": "trade_amount",
+          "min": "0"
+        },
+        {
+          "type": "range",
+          "field": "trade_count",
+          "min": "0"
+        },
+        {
+          "type": "range",
+          "field": "bid_depth_top_n_quantity",
+          "min": "0"
+        },
+        {
+          "type": "range",
+          "field": "bid_depth_top_n_amount",
+          "min": "0"
+        },
+        {
+          "type": "range",
+          "field": "ask_depth_top_n_quantity",
+          "min": "0"
+        },
+        {
+          "type": "range",
+          "field": "ask_depth_top_n_amount",
+          "min": "0"
+        },
+        {
+          "type": "range",
+          "field": "bid_observed_levels_avg",
+          "min": "0"
+        },
+        {
+          "type": "range",
+          "field": "ask_observed_levels_avg",
+          "min": "0"
+        },
+        {
+          "type": "range",
+          "field": "bid_observed_levels_min",
+          "min": "0"
+        },
+        {
+          "type": "range",
+          "field": "ask_observed_levels_min",
+          "min": "0"
+        },
+        {
+          "type": "range",
+          "field": "spread",
+          "min": "0",
+          "max": "1"
+        },
+        {
+          "type": "range",
+          "field": "bid_coverage_seconds",
+          "min": "0",
+          "max": "60"
+        },
+        {
+          "type": "range",
+          "field": "ask_coverage_seconds",
+          "min": "0",
+          "max": "60"
+        },
+        {
+          "type": "range",
+          "field": "joint_coverage_seconds",
+          "min": "0",
+          "max": "60"
+        },
+        {
+          "type": "level_map",
+          "field": "bid_level_prices",
+          "max": "1"
+        },
+        {
+          "type": "level_map",
+          "field": "bid_level_quantities",
+          "max": null
+        },
+        {
+          "type": "level_map",
+          "field": "bid_level_amounts",
+          "max": null
+        },
+        {
+          "type": "level_map",
+          "field": "ask_level_prices",
+          "max": "1"
+        },
+        {
+          "type": "level_map",
+          "field": "ask_level_quantities",
+          "max": null
+        },
+        {
+          "type": "level_map",
+          "field": "ask_level_amounts",
+          "max": null
+        },
+        {
+          "type": "string_array",
+          "field": "source_manifest_ids",
+          "nonempty": true
+        },
+        {
+          "type": "conditional_null",
+          "when": "trade_data_status",
+          "equals": "missing",
+          "field": "volume"
+        },
+        {
+          "type": "conditional_null",
+          "when": "trade_data_status",
+          "equals": "missing",
+          "field": "trade_amount"
+        },
+        {
+          "type": "conditional_null",
+          "when": "trade_data_status",
+          "equals": "missing",
+          "field": "trade_count"
+        },
+        {
+          "type": "conditional_null",
+          "when": "trade_data_status",
+          "equals": "missing",
+          "field": "open"
+        },
+        {
+          "type": "conditional_null",
+          "when": "trade_data_status",
+          "equals": "missing",
+          "field": "high"
+        },
+        {
+          "type": "conditional_null",
+          "when": "trade_data_status",
+          "equals": "missing",
+          "field": "low"
+        },
+        {
+          "type": "conditional_null",
+          "when": "trade_data_status",
+          "equals": "missing",
+          "field": "close"
+        },
+        {
+          "type": "conditional_null",
+          "when": "trade_data_status",
+          "equals": "missing",
+          "field": "vwap"
+        },
+        {
+          "type": "conditional_value",
+          "when": "trade_data_status",
+          "equals": "confirmed_no_trades",
+          "field": "volume",
+          "value": "0"
+        },
+        {
+          "type": "conditional_value",
+          "when": "trade_data_status",
+          "equals": "confirmed_no_trades",
+          "field": "trade_count",
+          "value": "0"
+        },
+        {
+          "type": "conditional_null",
+          "when": "trade_data_status",
+          "equals": "confirmed_no_trades",
+          "field": "open"
+        },
+        {
+          "type": "conditional_null",
+          "when": "trade_data_status",
+          "equals": "confirmed_no_trades",
+          "field": "high"
+        },
+        {
+          "type": "conditional_null",
+          "when": "trade_data_status",
+          "equals": "confirmed_no_trades",
+          "field": "low"
+        },
+        {
+          "type": "conditional_null",
+          "when": "trade_data_status",
+          "equals": "confirmed_no_trades",
+          "field": "close"
+        },
+        {
+          "type": "conditional_null",
+          "when": "trade_data_status",
+          "equals": "confirmed_no_trades",
+          "field": "vwap"
+        },
+        {
+          "type": "conditional_positive",
+          "when": "trade_data_status",
+          "equals": "observed",
+          "field": "volume"
+        },
+        {
+          "type": "conditional_positive",
+          "when": "trade_data_status",
+          "equals": "observed",
+          "field": "trade_count"
+        },
+        {
+          "type": "conditional_reason",
+          "when": "trade_data_status",
+          "equals": "observed",
+          "field": "open",
+          "reason": "open_close_reason"
+        },
+        {
+          "type": "conditional_reason",
+          "when": "trade_data_status",
+          "equals": "observed",
+          "field": "close",
+          "reason": "open_close_reason"
+        },
+        {
+          "type": "window_end",
+          "field": "as_of",
+          "start": "minute",
+          "unit": "minute"
+        },
+        {
+          "type": "conditional_value",
+          "when": "trade_data_status",
+          "equals": "confirmed_no_trades",
+          "field": "trade_amount",
+          "value": "0",
+          "allow_null": true
+        },
+        {
+          "type": "compare",
+          "left": "low",
+          "op": "<=",
+          "right": "open"
+        },
+        {
+          "type": "compare",
+          "left": "open",
+          "op": "<=",
+          "right": "high"
+        },
+        {
+          "type": "compare",
+          "left": "low",
+          "op": "<=",
+          "right": "close"
+        },
+        {
+          "type": "compare",
+          "left": "close",
+          "op": "<=",
+          "right": "high"
+        },
+        {
+          "type": "compare",
+          "left": "low",
+          "op": "<=",
+          "right": "vwap"
+        },
+        {
+          "type": "compare",
+          "left": "vwap",
+          "op": "<=",
+          "right": "high"
+        },
+        {
+          "type": "compare",
+          "left": "low",
+          "op": "<=",
+          "right": "high"
+        },
+        {
+          "type": "requires_present",
+          "field": "joint_coverage_seconds",
+          "required": "bid_coverage_seconds"
+        },
+        {
+          "type": "compare",
+          "left": "joint_coverage_seconds",
+          "op": "<=",
+          "right": "bid_coverage_seconds"
+        },
+        {
+          "type": "requires_present",
+          "field": "joint_coverage_seconds",
+          "required": "ask_coverage_seconds"
+        },
+        {
+          "type": "compare",
+          "left": "joint_coverage_seconds",
+          "op": "<=",
+          "right": "ask_coverage_seconds"
+        },
+        {
+          "type": "unique_json_keys",
+          "field": "bid_level_prices"
+        },
+        {
+          "type": "unique_json_keys",
+          "field": "bid_level_quantities"
+        },
+        {
+          "type": "unique_json_keys",
+          "field": "bid_level_amounts"
+        },
+        {
+          "type": "unique_json_keys",
+          "field": "ask_level_prices"
+        },
+        {
+          "type": "unique_json_keys",
+          "field": "ask_level_quantities"
+        },
+        {
+          "type": "unique_json_keys",
+          "field": "ask_level_amounts"
+        },
+        {
+          "type": "unique_json_keys",
+          "field": "source_manifest_ids"
+        },
+        {
+          "type": "zero_coverage_null",
+          "when": "bid_coverage_seconds",
+          "field": "bid_best_price"
+        },
+        {
+          "type": "zero_coverage_null",
+          "when": "bid_coverage_seconds",
+          "field": "bid_level_prices"
+        },
+        {
+          "type": "zero_coverage_null",
+          "when": "bid_coverage_seconds",
+          "field": "bid_level_quantities"
+        },
+        {
+          "type": "zero_coverage_null",
+          "when": "bid_coverage_seconds",
+          "field": "bid_level_amounts"
+        },
+        {
+          "type": "zero_coverage_null",
+          "when": "bid_coverage_seconds",
+          "field": "bid_depth_top_n_quantity"
+        },
+        {
+          "type": "zero_coverage_null",
+          "when": "bid_coverage_seconds",
+          "field": "bid_depth_top_n_amount"
+        },
+        {
+          "type": "zero_coverage_null",
+          "when": "bid_coverage_seconds",
+          "field": "bid_observed_levels_avg"
+        },
+        {
+          "type": "zero_coverage_null",
+          "when": "bid_coverage_seconds",
+          "field": "bid_observed_levels_min"
+        },
+        {
+          "type": "zero_coverage_null",
+          "when": "bid_coverage_seconds",
+          "field": "spread"
+        },
+        {
+          "type": "zero_coverage_null",
+          "when": "ask_coverage_seconds",
+          "field": "ask_best_price"
+        },
+        {
+          "type": "zero_coverage_null",
+          "when": "ask_coverage_seconds",
+          "field": "ask_level_prices"
+        },
+        {
+          "type": "zero_coverage_null",
+          "when": "ask_coverage_seconds",
+          "field": "ask_level_quantities"
+        },
+        {
+          "type": "zero_coverage_null",
+          "when": "ask_coverage_seconds",
+          "field": "ask_level_amounts"
+        },
+        {
+          "type": "zero_coverage_null",
+          "when": "ask_coverage_seconds",
+          "field": "ask_depth_top_n_quantity"
+        },
+        {
+          "type": "zero_coverage_null",
+          "when": "ask_coverage_seconds",
+          "field": "ask_depth_top_n_amount"
+        },
+        {
+          "type": "zero_coverage_null",
+          "when": "ask_coverage_seconds",
+          "field": "ask_observed_levels_avg"
+        },
+        {
+          "type": "zero_coverage_null",
+          "when": "ask_coverage_seconds",
+          "field": "ask_observed_levels_min"
+        },
+        {
+          "type": "zero_coverage_null",
+          "when": "ask_coverage_seconds",
+          "field": "spread"
+        },
+        {
+          "type": "zero_coverage_null",
+          "when": "joint_coverage_seconds",
+          "field": "spread"
+        }
+      ]
+    }
+  }
+}
