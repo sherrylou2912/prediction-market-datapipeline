@@ -47,7 +47,7 @@ Planner prepares the brief and blocks using the owner's request and prior decisi
 
 ### Loop rules
 
-- **Review log.** Record every round in `docs/pr<N>/REVIEW_LOG.md` (create it on the first round of the PR and register it in `docs/README.md`). Each round lists the reviewed revision, findings with IDs and severity, Analyst's response, and the checks each side actually ran. Reporter and Validator read this log; it is the evidence of what the loop changed.
+- **Review log.** Record every round in `docs/pr<N>/REVIEW_LOG.md` on the PR's working branch (create it on the first round of the PR). It is a process record and is not merged into `main`. Each round lists the reviewed revision, findings with IDs and severity, Analyst's response, and the checks each side actually ran. Reporter and Validator read this log; it is the evidence of what the loop changed.
 - **Round limit.** If a block has not converged after 3 review rounds, or Analyst and Reviewer disagree on a finding after one exchange, stop the loop and escalate to the owner through Reporter with both positions. Do not loop indefinitely or let either role silently drop a finding.
 - **Scope.** Reviewer findings must concern the current block and brief. New features, redesigns, or later-PR work are marked `out-of-scope` and go to Reporter as proposals; Analyst does not implement them unless already authorized.
 - **Design decisions.** Resolve routine implementation and design choices using the approved project rules and task context; explain tradeoffs and record the decision. Escalate a genuinely open question that requires the owner's preference, a conflict with an approved decision, or a new dependency requiring authorization before implementing it.
@@ -83,12 +83,13 @@ Planner prepares the brief and blocks using the owner's request and prior decisi
 - Support Python 3.9 and newer. Use `uv` for the existing environment and `ruff` for lint and format checks.
 - Bronze is immutable raw data; Silver is validated canonical data; Gold is a purpose-built product.
 - Use `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pytest tests/ -v` before delivery.
-- Keep legacy indexers separate from the v1 pipeline until their respective migration PRs.
-- Keep documentation in the layout described by `docs/README.md`: PR-specific plans, rules, and reading progress under `docs/pr<N>/`, architecture decision records under `docs/adr/`, and legacy-workflow docs under `docs/legacy/`. Add new documents to that index.
+- Legacy indexers and analysis code are not on `main`; they are preserved on `archive/upstream-main-2026-11-13`. Bring a piece into the v1 pipeline only through its migration PR, adapted to the adapter and writer interfaces.
+- Keep documentation in the layout described by `docs/README.md`: PR-specific formal rules under `docs/pr<N>/` and architecture decision records under `docs/adr/`. Add new documents to that index.
+- Keep `main` clean: it receives only pipeline code, tests, and formal documents through reviewed pull requests. Process records (`REVIEW_LOG.md`, `CODE_READING_PROGRESS.md`, plans, owner notes, superseded reports) stay on the PR's working branch, which is kept after merge as the audit trail; do not merge them into `main`.
 - Keep the new pipeline under `src/`; do not use a version number as the source folder name. Put settings and validation in `src/config/`, contracts in `src/data_schema/`, data directory and writer code in `src/data_io/`, and venue implementations in `src/adapters/`.
 
 ## Owner notes
 
-- Keep the project owner's private design notes in `docs/notes.md`.
+- Keep the project owner's private design notes in `docs/notes.md` on working branches only; they are not merged into `main`.
 - Write them in concise Chinese as numbered entries. State the idea, pipeline, and called functions; mark proposed functions as unimplemented.
 - Never include secrets, credentials, or personal data.

@@ -33,11 +33,11 @@ Reporting does not certify correctness or replace Validator; do not modify code 
 
 ## 逐文件代码阅读
 
-以下做法来自 PR1 逐文件阅读的实际经验（2026-11，参考 `docs/pr1/CODE_READING_PROGRESS.md`）。
+以下做法来自 PR1 逐文件阅读的实际经验（2026-11，参考分支 `codex/pr1-architecture` 上的 `docs/pr1/CODE_READING_PROGRESS.md`）。
 
 ### 基本规则
 
-- 阅读一个 PR 时，在 `docs/pr<编号>/` 下为该 PR 新建 `CODE_READING_PROGRESS.md`，将每个代码块或文件的阅读进度与 review notes 记录在同一文件中；如果该 PR 已有进度文件，则继续使用现有文件。
+- 阅读一个 PR 时，在该 PR 的工作分支 `docs/pr<编号>/` 下新建 `CODE_READING_PROGRESS.md`（过程记录，不合入 `main`），将每个代码块或文件的阅读进度与 review notes 记录在同一文件中；如果该 PR 已有进度文件，则继续使用现有文件。
 - 阅读讨论中将负责人提出的修改和测试要求记录在该进度文件里，标明尚未实施；完成阅读后交给 Analyst 修改。不要在阅读期间擅自实施这些待办，也不修改代码；负责人另行明确要求的整理工作（例如文档结构）除外。
 - 按人理解程序的顺序讲解：先介绍文件的 `main` 或实际入口及整体调用流程，再介绍其他函数；没有入口时先说明文件职责，再按调用关系讲解。
 - 对每个函数，结合实际测试代码说明已有测试做了什么、覆盖了哪些边界情况，并链接相关测试；区分直接测试和通过调用间接覆盖。没有找到对应测试或边界情况时明确说明，不把推测当作覆盖，也不把未运行的测试说成已通过。

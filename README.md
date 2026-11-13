@@ -1,6 +1,6 @@
 # Prediction Market Data Pipeline
 
-This repository contains a legacy prediction-market analysis workflow and the foundation of a new, versioned data pipeline. The new pipeline is designed for reproducible research, traceable source records, and recoverable data collection. `agent/PROJECT.md` is the architecture authority.
+This repository contains the foundation of a new, versioned prediction-market data pipeline. The pipeline is designed for reproducible research, traceable source records, and recoverable data collection. `agent/PROJECT.md` is the architecture authority.
 
 ## Current scope
 
@@ -18,7 +18,6 @@ The PR 1 pipeline foundation provides configuration loading, startup checks, six
 | `src/data_io/` | Create data directories and restrict each writer to its assigned layer. |
 | `src/adapters/` | Venue interface and a deterministic mock implementation. |
 | `src/cli.py`, `src/__main__.py` | The non-writing `python -m src check` configuration command. |
-| `src/common/`, `src/indexers/`, `src/analysis/` | Existing legacy code; its migration is outside PR 1. |
 
 There is no real data loader in PR 1. `src/data_io/` contains the directory and writer foundation for future loading work.
 
@@ -89,15 +88,9 @@ uv run pytest tests/ -v
 
 The focused acceptance tests are in `tests/test_pipeline_foundation.py`. They cover startup failures, configuration precedence, writer boundaries, schema/document agreement, point-in-time checks, and the mock adapter chain.
 
-## Legacy workflow
+## Legacy code
 
-The older collection and analysis commands remain available while their migration is planned. They still use the former `data/kalshi/` and `data/polymarket/` layout and are outside the new `DATA_ROOT` writer path. Do not use `make setup` to initialize the new pipeline: it downloads and extracts a large archive into the legacy layout.
-
-```bash
-make index
-make analyze
-make package
-```
+The upstream analysis workflow and indexers (`src/common/`, `src/indexers/`, `src/analysis/`, `main.py`, `make index/analyze/package/setup`) are not on `main`. They are preserved unchanged on the branch `archive/upstream-main-2026-11-13`; later migration PRs bring pieces into the pipeline from there through the adapter and writer interfaces. Its `make setup` downloads a large archive into the old `data/` layout and must not be used to initialize this pipeline.
 
 ## Documentation
 
@@ -109,22 +102,7 @@ make package
 - [Configuration guide](src/config/README.md)
 - [Configuration developer summary](src/config/README_FOR_DEVELOPER.md)
 - [Configuration evolution rules](src/config/developing.md)
-- [Writing analyses in the legacy workflow](docs/legacy/ANALYSIS.md)
 
-## Research & Citations
+## Origin and license
 
-- Becker, J. (2026). _The Microstructure of Wealth Transfer in Prediction Markets_. Jbecker. https://jbecker.dev/research/prediction-market-microstructure
-- Becker, J. (2026). _The Microstructure of Wealth Transfer in Prediction Markets_. SSRN. https://papers.ssrn.com/sol3/papers.cfm?abstract_id=7217640
-- Le, N. A. (2026). _Decomposing Crowd Wisdom: Domain-Specific Calibration Dynamics in Prediction Markets_. arXiv. https://arxiv.org/abs/2602.19520
-- Akey P., Gregoire, V., Harvie, N., Martineau, C. (2026). _Who Wins and Who Loses In Prediction Markets? Evidence from Polymarket_. SSRN. https://papers.ssrn.com/sol3/papers.cfm?abstract_id=6443103
-- Vedova, J. (2026). _Who Profits from Prediction Markets? Execution, not Information_. SSRN. https://papers.ssrn.com/sol3/papers.cfm?abstract_id=6191618
-- Brown, A. (2026). _Cassandra Or the Boy Who Cried Wolf? Are Prediction Markets Effective Early Warning Systems?_. SSRN. https://papers.ssrn.com/sol3/papers.cfm?abstract_id=6381538
-- Cao, D. (2026). _Retail-Adjusted Expected Value in Prediction Markets: Calibration, Longshot Bias, and Consumer Welfare_. SSRN. https://papers.ssrn.com/sol3/Delivery.cfm/7049119.pdf?abstractid=7049119&mirid=1
-- Adamczewski, M. (2026). _Integration Without Leadership: Cross-Venue Price Discovery in UFC Prediction Markets_. SSRN. https://papers.ssrn.com/sol3/papers.cfm?abstract_id=7194218
-- Reichenbach, F., Walther, M. (2025). _Exploring Decentralized Prediction Markets: Accuracy, Skill, and Bias on Polymarket_. SSRN. https://papers.ssrn.com/sol3/papers.cfm?abstract_id=5910522
-- Bartlett, R., O'Hara, M. (2026). _Adverse Selection in Prediction Markets: Evidence from Kalshi_. SSRN. https://papers.ssrn.com/sol3/papers.cfm?abstract_id=6615739
-- Luong, K. L., Heesen, G. (2026). _The Wisdom of the Few: Skilled Traders and Prediction Market Accuracy_. SSRN. https://papers.ssrn.com/sol3/papers.cfm?abstract_id=6758662
-- Adegbenro, A. (2026). _What Prediction Markets Can See: Market Formation, Settlement Legibility, and the Geography of Tradable Uncertainty in Africa and Latin America_. arXiv. https://arxiv.org/abs/2606.17503
-- Mauboussin, M. J., Callahan, D. (2026). _The Wisdom of Crowds in Markets: Crowd Behavior in Prediction, Betting, and Stock Markets_. Morgan Stanley. https://www.morganstanley.com/content/dam/im/assets/publication/thought-leadership/consilient-observer/article_thewisdomofcrowds_ltr.pdf?1786370649511
-
-The citations and the dataset referenced above come from the upstream project; this repository retains their attribution and license.
+This repository started as a clone of [jon-becker/prediction-market-analysis](https://github.com/jon-becker/prediction-market-analysis). Its license is retained in [`LICENSE`](LICENSE). The upstream research citations and dataset references remain on `archive/upstream-main-2026-11-13`.
