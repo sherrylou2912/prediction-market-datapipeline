@@ -16,7 +16,7 @@
 | `src/config/errors.py` | 配置错误类型。 |
 | `src/config/__init__.py` | 对外导出 `PipelineConfig` 和 `ConfigError`。 |
 
-PR1 尚未实现真实 initial load、incremental load、validation job 或 backtest，因此当前没有对应的 task models、profiles、jobs 或 experiments 文件。
+目前尚未实现真实 initial load、incremental load、validation job 或 backtest，因此当前没有对应的 task models、profiles、jobs 或 experiments 文件。
 
 ## 当前字段
 

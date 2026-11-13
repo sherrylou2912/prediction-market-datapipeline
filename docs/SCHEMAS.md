@@ -5,7 +5,7 @@
 ## 存储与版本规则
 
 - 所有路径相对于配置的 `DATA_ROOT`。Bronze 的 JSONL.zst 或 Parquet.zstd、Silver 和 Gold 的 Parquet.zstd 为计划格式，尚未实现。
-- 当前工作区的 PR1 契约版本为 `7.0.0`，尚未发布；`gold.market_daily` 新增 `day_start` 规则（`as_of` 不得早于 `day` 的 UTC 零点）收紧了可接受输入，按规则从工作区之前的 `6.0.0` 提升主版本。`6.0.0` 的原因：Silver 市场开放/关闭时间拆分为计划与实际时间、未分类的来源时间原文另存（旧 `open_at`、`close_at` 删除）、outcome 主键加入 `market_id`、新增可空说明字段并允许结算时间未知，由 `5.0.0` 提升主版本（`5.0.0` 由 Bronze 可空性和原始字节表示变化引入）。当前 HEAD 仍为 `2.0.0`，没有实现旧版本迁移。registry 的顶层 `version_field` 指定各数据集的版本字段，加载时检查每个数据集都使用一个针对该必填字段的版本规则，且拒绝 JSON 的重复键。字段的含义、类型、可空性、增删或主键变更，以及规则新增、放宽或收紧（包括范围、枚举和行内规则），都需要提升版本；破坏性变更提升主版本，兼容新增提升次版本，非语义修正提升补丁版本。拒绝未知字段。
+- 当前契约版本为 `7.0.0`，所有数据集共享。目前没有旧版本数据的迁移器。registry 的顶层 `version_field` 指定各数据集的版本字段，加载时检查每个数据集都使用一个针对该必填字段的版本规则，且拒绝 JSON 的重复键。字段的含义、类型、可空性、增删或主键变更，以及规则新增、放宽或收紧（包括范围、枚举和行内规则），都需要提升版本；破坏性变更提升主版本，兼容新增提升次版本，非语义修正提升补丁版本。拒绝未知字段。
 - `utc_datetime` 只接受 `tzinfo is datetime.timezone.utc` 的 Python 时间；`ZoneInfo("UTC")` 等独立的零偏移时区对象均拒绝。Python 的 `timezone(timedelta(0))` 和 `timezone.utc` 是同一个对象，无法区分，均被接受。Arrow 类型是 `timestamp[us, tz=UTC]`。
 - `int` 必须能表示为 Arrow 有符号 `int64`；`decimal` 使用有限 Python `Decimal`、Arrow `decimal128(28, 10)`；`binary` 使用 Python `bytes` 和 Arrow binary。价格和 payout 为 0–1，份数、金额、次数和时长非负。JSON 中盘口价格、份数和金额也必须能精确放入相同精度；超出精度时拒绝，不进行舍入。JSON 中盘口数字可用十进制字符串，分钟档位字典只用十进制字符串，以避免浮点精度丢失。需要结构化解释的 JSON 字段由 `unique_json_keys` 规则拒绝对象及嵌套对象中的重复键；Bronze `raw_payload` 可保留原始 JSON 文本，包括重复键，`raw_bytes` 可保留不需先解析的原始字节。规范化解释前须严格解析并拒绝歧义、保留原始证据。
 - 字段类型后的 `?` 表示可空，字段依然必须存在；所有字符串字段不得为空或全空格，所有 Arrow 字符串（包括 JSON 文本）必须能够编码为 UTF-8。主键在行内必填，跨行唯一性由 PR4 检查。
