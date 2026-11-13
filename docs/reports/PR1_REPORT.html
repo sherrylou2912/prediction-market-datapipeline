@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PR1 数据工厂地基</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@600;700&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: an analyst's review memo — summary first, then config reference, then a round-by-round change log with evidence. */
+:root {
+  --bg: #f6f7f5;
+  --paper: #ffffff;
+  --ink: #1d2422;
+  --muted: #5d6763;
+  --line: #d9dfdc;
+  --accent: #1f5f5b;
+  --accent-soft: #e2efed;
+  --ok: #2e7d4f;
+  --ok-soft: #e1f1e7;
+  --warn: #9a6200;
+  --warn-soft: #f7ecd6;
+  --risk: #a23b2a;
+  --risk-soft: #f6e1dc;
+  --font-display: "Noto Serif SC", "Songti SC", serif;
+  --font-body: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #131817; --paper: #1b2120; --ink: #e6ebe9; --muted: #9aa6a1; --line: #2e3735;
+    --accent: #6cc2b9; --accent-soft: #1f3331; --ok: #6fcf97; --ok-soft: #1c3226;
+    --warn: #f0b85a; --warn-soft: #3a2f1a; --risk: #f08b78; --risk-soft: #3a221d;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #131817; --paper: #1b2120; --ink: #e6ebe9; --muted: #9aa6a1; --line: #2e3735;
+  --accent: #6cc2b9; --accent-soft: #1f3331; --ok: #6fcf97; --ok-soft: #1c3226;
+  --warn: #f0b85a; --warn-soft: #3a2f1a; --risk: #f08b78; --risk-soft: #3a221d;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--ink);
+  font-family: var(--font-body); font-size: 16px; line-height: 1.75;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 32px 64px;
+}
+main { max-width: 820px; margin: 0 auto; display: flex; flex-direction: column; gap: 56px; }
+section { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; line-height: 1.35; }
+h1 { font-size: clamp(28px, 5.5vw, 40px); }
+h2 { font-size: 23px; padding-top: 10px; border-top: 2px solid var(--ink); }
+h3 { font-size: 17px; }
+p { margin: 0; }
+ul { margin: 0; padding-left: 20px; }
+li + li { margin-top: 4px; }
+.eyebrow { font-size: 13px; letter-spacing: .12em; color: var(--accent); font-weight: 700; }
+.lede { font-size: 17px; color: var(--muted); }
+code { font-family: var(--font-mono); font-size: .86em; background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+.muted { color: var(--muted); }
+.small { font-size: 14px; }
+
+/* Summary */
+.summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.stat { background: var(--paper); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.stat .k { font-size: 13px; color: var(--muted); letter-spacing: .04em; }
+.stat .v { font-family: var(--font-display); font-size: 22px; font-variant-numeric: tabular-nums; }
+.stat .v.ok { color: var(--ok); }
+@media (max-width: 640px) { .summary { grid-template-columns: 1fr; } }
+.asks { display: flex; flex-direction: column; gap: 10px; }
+.ask { display: grid; grid-template-columns: 76px 1fr; gap: 12px; padding: 12px 14px; border-radius: 10px; background: var(--paper); border: 1px solid var(--line); align-items: start; }
+.pill { font-size: 12px; font-weight: 700; text-align: center; padding: 3px 0; border-radius: 999px; letter-spacing: .04em; }
+.pill.ok { background: var(--ok-soft); color: var(--ok); }
+.pill.warn { background: var(--warn-soft); color: var(--warn); }
+.pill.risk { background: var(--risk-soft); color: var(--risk); }
+@media (max-width: 480px) { .ask { grid-template-columns: 1fr; gap: 4px; } .pill { justify-self: start; padding: 3px 10px; } }
+
+/* Config reference */
+.cfg { background: var(--paper); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.cfg-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 14px; }
+.cfg-head .name { font-family: var(--font-mono); font-weight: 500; font-size: 16px; }
+.cfg-head .def { font-size: 13px; color: var(--muted); }
+.cfg dl { display: grid; grid-template-columns: 92px 1fr; gap: 4px 14px; margin: 0; font-size: 15px; }
+.cfg dt { color: var(--muted); font-size: 13px; padding-top: 2px; }
+.cfg dd { margin: 0; min-width: 0; }
+@media (max-width: 480px) { .cfg dl { grid-template-columns: 1fr; } .cfg dt { padding-top: 6px; } }
+.group-label { font-size: 13px; letter-spacing: .1em; color: var(--muted); font-weight: 700; margin-top: 8px; }
+
+/* Rounds */
+.round { border-left: 3px solid var(--accent); background: var(--paper); border-radius: 0 10px 10px 0; padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.round-head { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; }
+.round-head .id { font-family: var(--font-mono); font-size: 13px; color: var(--accent); font-weight: 500; }
+.round-head .meta { font-size: 13px; color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
+.changes { display: flex; flex-direction: column; gap: 8px; }
+.change { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 4px 16px; font-size: 15px; padding-top: 8px; border-top: 1px dashed var(--line); }
+.change:first-child { border-top: none; padding-top: 0; }
+.change .lbl { font-size: 12px; color: var(--muted); letter-spacing: .06em; display: block; }
+.change .why { grid-column: 1 / -1; font-size: 14px; color: var(--muted); }
+@media (max-width: 600px) { .change { grid-template-columns: 1fr; } }
+.files { font-size: 13px; color: var(--muted); }
+.evidence { font-size: 14px; }
+.evidence b { color: var(--ok); font-weight: 500; }
+.round.owner { border-left-color: var(--warn); }
+.round.gate { border-left-color: var(--ok); }
+
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }
+table { border-collapse: collapse; width: 100%; font-size: 15px; min-width: 560px; }
+th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 13px; color: var(--muted); font-weight: 500; background: var(--bg); }
+tr:last-child td { border-bottom: none; }
+td.num { font-family: var(--font-mono); white-space: nowrap; font-variant-numeric: tabular-nums; }
+footer { font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 16px; }
+</style>
+</head>
+<body>
+<main>
+  <header style="display:flex;flex-direction:column;gap:14px">
+    <div class="eyebrow">PR1 代码汇报 · 2026-11-13 · 已 squash 合入 main（PR #1、#2）</div>
+    <h1>PR1 修改记录与代码可靠性说明</h1>
+    <p class="lede">这份记录写给需要为代码可靠性负责的人：先说结论和风险，再逐项解释每个重要配置，最后按轮次说明每次改了哪些设计、为什么改、用什么证明改对了。</p>
+  </header>
+
+  <section>
+    <h2>结论</h2>
+    <div class="summary">
+      <div class="stat"><span class="k">最终独立验证</span><span class="v ok">可交审阅</span><span class="small muted">第 3 轮结论，无必须修复项</span></div>
+      <div class="stat"><span class="k">自动测试</span><span class="v">354 通过</span><span class="small muted">验证时 475 项，其中 121 项属于移出 main 的旧代码</span></div>
+      <div class="stat"><span class="k">审查轮次</span><span class="v">27 轮</span><span class="small muted">块内审查 24 轮 + 最终验证 3 轮</span></div>
+    </div>
+    <div class="asks">
+      <div class="ask"><span class="pill ok">已保证</span><p>配置填错会在动手前停下且不泄露输入；写文件要么完整发布、要么不动并留证据；14 种数据集的格式和单行规则由同一份 JSON 执行，文档自动生成并有测试比对。</p></div>
+      <div class="ask"><span class="pill risk">未验证</span><p>没有连接真实交易所；没有在外接硬盘、断电、大数据量或多进程并发下实测；只在 Python 3.9（CPython）上跑过。测试全绿不代表生产可用。</p></div>
+      <div class="ask"><span class="pill warn">待决定</span><p>已由负责人合并。PR2 设计调度器时需再确认：是否继续支持只读映射输入（约 25 行依赖 CPython 细节的代码）。</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>重要配置逐项说明</h2>
+    <p>"配置"就是程序运行前要告诉它的设置。PR1 只有 4 个运行设置，所有任务共用。每一项在任务真正动手之前都会被检查，填错就停下并给出说明。</p>
+
+    <div class="group-label">运行设置（可用环境变量或本机 .env 文件覆盖）</div>
+
+    <div class="cfg">
+      <div class="cfg-head"><span class="name">DATA_ROOT</span><span class="def">必须填写，没有默认值</span></div>
+      <dl>
+        <dt>它是什么</dt><dd>所有数据的总文件夹，例如 <code>/Volumes/DataDisk/pm-data</code>。下面的 bronze、silver、gold 等子文件夹都从它派生，代码里不写死任何数据路径。</dd>
+        <dt>怎么检查</dt><dd>必须是绝对路径，不能含空字符。写任务前还会检查：能否真的写入、硬盘支不支持"硬链接"（安全发布文件要用到）；在 Mac 上如果放在 <code>/Volumes/某个盘</code>，这个盘必须真的插着，不能只是同名空文件夹。</dd>
+        <dt>为什么重要</dt><dd>外接硬盘没插好时，程序可能把数据写进电脑本地的同名空文件夹，数据就"丢"在错的地方。现在这种情况会在写入前被拒绝。</dd>
+        <dt>代码位置</dt><dd><code>src/config/models/pipeline.py</code></dd>
+      </dl>
+    </div>
+
+    <div class="cfg">
+      <div class="cfg-head"><span class="name">DATA_MIN_FREE_GIB</span><span class="def">默认 200（在 storage.json）</span></div>
+      <dl>
+        <dt>它是什么</dt><dd>写数据前硬盘至少要剩多少空间，单位 GiB。</dd>
+        <dt>怎么检查</dt><dd>只接受普通非负整数，<code>4_000</code>、<code>+4</code>、<code>true</code> 都会被拒绝。空间不够时，写任务在开始前停下，并说明还剩多少、要求多少。</dd>
+        <dt>为什么是 200</dt><dd>旧的历史归档约 36 GiB，解压、整理、重写还要几倍空间；与其写到一半撑满硬盘，不如开始前就拦住。</dd>
+        <dt>注意</dt><dd>只读任务和 <code>check</code> 命令不检查空间，也不创建任何文件夹。</dd>
+      </dl>
+    </div>
+
+    <div class="cfg">
+      <div class="cfg-head"><span class="name">PIPELINE_LOG_LEVEL</span><span class="def">默认 INFO（在 runtime.json）</span></div>
+      <dl>
+        <dt>它是什么</dt><dd>日志写多详细：DEBUG、INFO、WARNING、ERROR、CRITICAL 之一，大小写不敏感。</dd>
+        <dt>日志格式</dt><dd>每行一个 JSON，包含时间（UTC）、级别、事件名和消息，方便检索和排查。</dd>
+        <dt>注意</dt><dd>启动时的"配置记录"按 INFO 级别输出，设成 WARNING 以上就看不到；首个数据任务（PR2）要决定这条记录是否不受级别限制。</dd>
+      </dl>
+    </div>
+
+    <div class="cfg">
+      <div class="cfg-head"><span class="name">PIPELINE_CONFIG_DIR</span><span class="def">默认 src/config/defaults</span></div>
+      <dl>
+        <dt>它是什么</dt><dd>存放默认值文件（<code>storage.json</code>、<code>runtime.json</code>）的文件夹。默认值放在受版本控制的文件里，谁改过都有记录。</dd>
+        <dt>优先顺序</dt><dd>程序参数 &gt; 进程环境变量 &gt; 本机 <code>.env</code> &gt; 默认 JSON。</dd>
+      </dl>
+    </div>
+
+    <div class="group-label">围绕配置的几条机制</div>
+
+    <div class="cfg">
+      <div class="cfg-head"><span class="name">.env 文件</span><span class="def">每台机器一份，不进 Git</span></div>
+      <dl>
+        <dt>它是什么</dt><dd>本机的全局设置和密钥（例如以后用的 Kalshi、Polymarket API 密钥，PR1 还没用到）。任务参数不放这里。</dd>
+        <dt>怎么检查</dt><dd>文件不存在可以跳过；但如果它是文件夹、坏掉的快捷方式或读不了，就报错，而不是悄悄忽略。重复的键也报错。</dd>
+      </dl>
+    </div>
+
+    <div class="cfg">
+      <div class="cfg-head"><span class="name">配置报错信息</span><span class="def">src/config/validation.py</span></div>
+      <dl>
+        <dt>它是什么</dt><dd>配置填错时给出的说明文字。</dd>
+        <dt>设计</dt><dd>只使用一张事先审过的固定文字表，最多说出是哪个配置项错了，从不复述你填的内容。因为填错的内容可能恰好是密码。</dd>
+      </dl>
+    </div>
+
+    <div class="cfg">
+      <div class="cfg-head"><span class="name">启动配置记录</span><span class="def">事件名 config.effective</span></div>
+      <dl>
+        <dt>它是什么</dt><dd>运行 <code>check</code> 时输出一条日志：每个设置的实际值、来自哪里（如 <code>environment:DATA_ROOT</code>、<code>default:storage.json</code>），以及这些值的 SHA-256 指纹。</dd>
+        <dt>为什么</dt><dd>项目硬规则 10：任务开始时要能说清"这次到底用了什么设置"。指纹只看值不看来源，所以两次运行设置相同，指纹就相同。</dd>
+        <dt>边界</dt><dd>这 4 个设置都不是密钥，所以全部输出；<code>.env</code> 里的其他变量不会出现。写进运行记录数据库属于 PR2。</dd>
+      </dl>
+    </div>
+
+    <div class="group-label">写入与数据规则里的固定设计</div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>设计项</th><th>具体是什么</th><th>作用</th></tr></thead>
+        <tbody>
+          <tr><td>写入角色</td><td>6 个：imports、bronze、silver、gold、quarantine、manifests</td><td>每个写入程序只能写自己那一层，写错层直接拒绝。</td></tr>
+          <tr><td>recovery 文件夹</td><td>冲突文件和写到一半的文件放这里，每个附一份说明（原因、校验和、时间）</td><td>出问题时保留证据，不覆盖、不删除。</td></tr>
+          <tr><td>写锁 <code>.writer.lock</code></td><td>同一时间只允许一个写入方；被占用时立刻失败，不等待</td><td>防止两个程序同时写同一份数据。等待超时留到 PR2。</td></tr>
+          <tr><td>接收编号 receipt_id</td><td>只能用小写字母、数字、<code>_</code>、<code>-</code>，必须是文件所在文件夹名</td><td>区分两次独立接收；避免 Mac 上大小写不敏感导致 A 和 a 撞成同一个文件。</td></tr>
+          <tr><td>契约版本</td><td class="num">7.0.0</td><td>数据规则每改一次就升版本；目前没有旧版本数据的迁移。</td></tr>
+          <tr><td>数字精度</td><td class="num">28 位，小数 10 位</td><td>超出直接拒绝，不偷偷四舍五入。</td></tr>
+          <tr><td>价格与时间</td><td class="num">0–1，UTC</td><td>价格就是概率；所有时间用世界标准时间。</td></tr>
+          <tr><td>交易所适配器声明</td><td>9 项：能力、主键、分页方式、限速、时间含义、精度、交易所、API 版本、协议版本</td><td>新增交易所时必须先声明这些，声明不合理就无法创建。</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>每一轮改了哪些设计</h2>
+    <p>流程：我实现一块 → 独立审查者找问题 → 我修改 → 再审，直到没有阻塞问题 → 全部完成后另一位独立验证者整体复查。审查者和我不共享思路，只看代码和证据。下面每轮写明"之前 → 之后"和原因。</p>
+
+    <div class="round">
+      <div class="round-head"><h3>首版实现</h3><span class="id">2026-11-09</span><span class="meta">299 项测试</span></div>
+      <p class="small">按逐文件阅读时定下的决定，一次完成配置、日志、写入层、数据规则、适配器和文档。</p>
+      <div class="changes">
+        <div class="change"><div><span class="lbl">之前</span>配置用普通类，直接构造可绕过检查；规则写在 Python 代码里。</div><div><span class="lbl">之后</span>配置改用 pydantic 自动校验；数据规则全部写进 <code>schema_registry.json</code>，代码只负责执行。</div></div>
+        <div class="change"><div><span class="lbl">之前</span>写入冲突或中断时没有固定去处。</div><div><span class="lbl">之后</span>新增 recovery 文件夹、写锁和接收编号。</div></div>
+      </div>
+    </div>
+
+    <div class="round owner">
+      <div class="round-head"><h3>第一次独立验证：要求修改</h3><span class="id">2026-11-11</span><span class="meta">修复后 320 项</span></div>
+      <p class="small">三位验证者找出 9 类问题，例如：大小写不敏感的硬盘上 A 和 a 撞成同一个文件；recovery 说明文件损坏也被当成正常；配置报错的完整堆栈里能看到输入内容。这些问题之后按新流程分块修复（B1–B4）。</p>
+    </div>
+
+    <div class="round">
+      <div class="round-head"><h3>配置报错不泄露输入</h3><span class="id">B1</span><span class="meta">3 轮 + 负责人决定 + 2 轮</span></div>
+      <div class="changes">
+        <div class="change"><div><span class="lbl">之前</span>直接使用 pydantic 自带的报错文字，里面可能带着你填的字段名、字典键或取值。</div><div><span class="lbl">之后</span>只用固定的安全文字表，只报出已声明的配置项名；原始错误不挂在异常链上。</div><div class="why">为什么：第 3 轮又发现一种内置错误会带出输入值，说明"逐个打补丁"不可靠，负责人决定改为固定文字。</div></div>
+      </div>
+      <p class="files">文件：src/config/validation.py、loader.py、两份 config README</p>
+      <p class="evidence"><b>证据：</b>针对未知字段名、字典键、类型标签三种泄露都有回归测试，检查完整堆栈不含输入。</p>
+    </div>
+
+    <div class="round">
+      <div class="round-head"><h3>写入层的持久性和恢复</h3><span class="id">B2</span><span class="meta">2 轮</span></div>
+      <div class="changes">
+        <div class="change"><div><span class="lbl">之前</span>新建文件夹后"落盘确认"失败，重试时因为文件夹已存在就跳过确认，可能误报写入成功。</div><div><span class="lbl">之后</span>不论文件夹是新建还是已存在，都确认其上级落盘后再发布文件。</div></div>
+        <div class="change"><div><span class="lbl">之前</span>中断残留文件的说明可以被改成"完整"，修改时间可缺失。</div><div><span class="lbl">之后</span>残留文件的说明必须写明"完整性未知"和带时区的修改时间，否则初始化报错且不动证据。</div></div>
+      </div>
+      <p class="files">文件：src/data_io/layout.py</p>
+      <p class="evidence"><b>证据：</b>模拟连续两次落盘失败，确认文件不会被发布；四种说明损坏都被拒绝并保留数据。</p>
+    </div>
+
+    <div class="round owner">
+      <div class="round-head"><h3>适配器出错时保留证据</h3><span class="id">B3</span><span class="meta">2 轮 + 负责人决定 + 3 轮</span></div>
+      <div class="changes">
+        <div class="change"><div><span class="lbl">之前</span>记录里有只读映射、超深 JSON、数字和文字混合的字段名时，程序直接崩溃，拿不到证据。</div><div><span class="lbl">之后</span>这些都转成统一的"规范化错误"，并带上原始记录。</div></div>
+        <div class="change"><div><span class="lbl">之前</span>默认任何 Python 对象都能复制，复制失败就丢证据；自定义对象还能在"复制"时偷偷把来源编号改掉。</div><div><span class="lbl">之后</span>只复制可信的内置类型；复制不了时保留原对象并标明"不是独立副本"。适配器只能拿到只读副本，改不了来源。</div><div class="why">为什么：任意对象不一定能复制，负责人决定"能复制就给独立副本，不能就给原对象并明确标记"。</div></div>
+      </div>
+      <p class="files">文件：src/adapters/base.py、src/data_schema/contracts.py</p>
+      <p class="evidence"><b>证据：</b>伪造来源编号、自定义复制、不可复制对象等测试，成交和盘口两条路径都覆盖。</p>
+    </div>
+
+    <div class="round">
+      <div class="round-head"><h3>数据规则补漏</h3><span class="id">B4</span><span class="meta">2 轮 · 版本 3.0.0 → 4.0.0 · 408 项</span></div>
+      <div class="changes">
+        <div class="change"><div><span class="lbl">之前</span>覆盖率为 0 的分钟数据仍可填盘口值；一秒数据的中间价可以和买卖价对不上。</div><div><span class="lbl">之后</span>覆盖为 0 时相关值必须为空；中间价、微价格、不平衡度都要求两侧数据存在且自洽。</div></div>
+        <div class="change"><div><span class="lbl">之前</span>盘口里的价格和数量可以超出约定精度；当日成交笔数为 0 却有成交量也能通过。</div><div><span class="lbl">之后</span>超精度直接拒绝；成交笔数为 0 时成交量只能是 0 或未知。</div></div>
+        <div class="change"><div><span class="lbl">之前</span>价差计算受调用方小数精度设置影响；规则文件里重复的键会被悄悄覆盖。</div><div><span class="lbl">之后</span>价差用精确分数比较；规则文件出现重复键直接拒绝加载。</div><div class="why">负责人决定：一秒数据里成交量未知时可以留空，盘口记录照样保留。</div></div>
+      </div>
+      <p class="files">文件：schema_registry.json、contracts.py、docs/SCHEMAS.md</p>
+    </div>
+
+    <div class="round">
+      <div class="round-head"><h3>原始数据的来源和内容</h3><span class="id">B5</span><span class="meta">2 轮 · 版本 → 5.0.0 · 436 项</span></div>
+      <div class="changes">
+        <div class="change"><div><span class="lbl">之前</span>原始记录必须有交易所和 API 版本，内容必须是 JSON。</div><div><span class="lbl">之后</span>交易所、API 版本可以为空（不编造）；内容可以是 JSON 文本或原始字节，二者只能填一个。</div></div>
+        <div class="change"><div><span class="lbl">之前</span>先解析内容，再判断是不是送错了适配器。</div><div><span class="lbl">之后</span>先判断是否送错，再查时间、再解析；"写入时间早于接收时间"的记录保留，但不进入规范层。</div><div class="why">为什么：送错地方的 CSV 字节会被误记成"本数据集损坏"，掩盖真正的调度错误。</div></div>
+      </div>
+      <p class="files">文件：schema_registry.json、contracts.py、src/adapters/base.py</p>
+    </div>
+
+    <div class="round owner">
+      <div class="round-head"><h3>API 版本改为可选</h3><span class="id">B5a</span><span class="meta">1 轮 · 448 项</span></div>
+      <div class="changes">
+        <div class="change"><div><span class="lbl">之前</span>每个适配器必须声明 API 版本，没有版本的来源进不了规范层。</div><div><span class="lbl">之后</span>可以声明"没有"；有版本和无版本的记录不会被送错适配器。</div><div class="why">负责人决定。</div></div>
+      </div>
+    </div>
+
+    <div class="round owner">
+      <div class="round-head"><h3>市场、选项、结算字段</h3><span class="id">B6</span><span class="meta">2 轮 · 版本 → 6.0.0 · 442 项</span></div>
+      <div class="changes">
+        <div class="change"><div><span class="lbl">之前</span>市场只有 <code>open_at</code>、<code>close_at</code>，分不清是计划时间还是实际时间；没有描述和结算条件。</div><div><span class="lbl">之后</span>拆成计划开放/关闭、实际开放/关闭四个时间；来源没说清时原文存进单独字段，不猜含义；新增描述和结算条件。</div><div class="why">负责人决定：说不清的时间在规范层保留原文（我第一版只留在原始层，审查指出这是我自己的解读）。</div></div>
+        <div class="change"><div><span class="lbl">之前</span>选项（outcome）只按选项编号区分；结算时间必填。</div><div><span class="lbl">之后</span>选项身份加入市场编号，不同市场重复使用编号也不冲突；结算时间可以未知，不拿观察时间凑数。</div></div>
+      </div>
+    </div>
+
+    <div class="round">
+      <div class="round-head"><h3>每日数据的时间下限</h3><span class="id">B7</span><span class="meta">1 轮 · 版本 → 7.0.0 · 453 项</span></div>
+      <div class="changes">
+        <div class="change"><div><span class="lbl">之前</span>2024-01-02 的日汇总可以标成 2024-01-01 就已可用。</div><div><span class="lbl">之后</span>新增通用规则 <code>day_start</code>：可用时间不得早于当天 UTC 0 点；不要求当天已结束。</div></div>
+      </div>
+      <p class="small muted">同时把留给后续 PR 的质量问题集中记录，例如盘口买价高于卖价、序列缺口目前都不检查。</p>
+    </div>
+
+    <div class="round gate">
+      <div class="round-head"><h3>最终验证第 1 轮：要求修改</h3><span class="id">Validator R1</span><span class="meta">3 项应修 + 简化建议</span></div>
+      <p class="small">发现：自动生成的文档漏列了 B7 的新规则；路由检查实际在部分解析之后；写锁"立刻失败"没有写清楚。另外首次按新规定评估了"每段代码是否必要"。</p>
+    </div>
+
+    <div class="round owner">
+      <div class="round-head"><h3>修复验证发现并精简代码</h3><span class="id">B8</span><span class="meta">3 轮 · 474 项</span></div>
+      <div class="changes">
+        <div class="change"><div><span class="lbl">之前</span>文档生成器自己维护一份"规则引用哪些字段"的列表，和执行代码不同步。</div><div><span class="lbl">之后</span>生成器直接复用执行代码的那份定义；新增测试保证每条规则都出现在对应字段行。</div></div>
+        <div class="change"><div><span class="lbl">之前</span>启动时不记录实际用了哪些设置。</div><div><span class="lbl">之后</span>新增启动配置记录（见上文）。</div></div>
+        <div class="change"><div><span class="lbl">删除</span>永远不会执行的异常处理、只有测试在用的属性、旧版恢复说明的兼容分支、和契约版本重复的适配器声明。</div><div><span class="lbl">回归</span>第 2 轮审查发现我把来源记录改成只读后，配置对象不能再跨进程传递；改成不可变元组并加测试。</div></div>
+      </div>
+    </div>
+
+    <div class="round owner">
+      <div class="round-head"><h3>恢复只读记录的规范化</h3><span class="id">B9</span><span class="meta">1 轮 · 475 项</span></div>
+      <div class="changes">
+        <div class="change"><div><span class="lbl">之前</span>B8 的一项简化让内容合法的只读记录也无法规范化，影响比当初描述的大。</div><div><span class="lbl">之后</span>底层确认是普通字典的只读记录照常处理；伪造的仍然被拒并保留原对象。复制时不再触发记录里自定义的代码。</div><div class="why">负责人决定恢复。我的教训：简化前应先列出所有受影响的正常路径，而不只是失败路径。</div></div>
+      </div>
+    </div>
+
+    <div class="round gate">
+      <div class="round-head"><h3>最终验证第 2、3 轮：可交审阅</h3><span class="id">Validator R2–R3</span><span class="meta">无必须修复项</span></div>
+      <p class="small">验证者自己重跑全部检查，逐条复现并确认修复，没有把"审查已通过"当作证据。</p>
+    </div>
+
+    <div class="round owner">
+      <div class="round-head"><h3>合入 main 并清理</h3><span class="id">PR #1、#2</span><span class="meta">354 项</span></div>
+      <div class="changes">
+        <div class="change"><div><span class="lbl">之前</span>main 是上游旧代码；PR1 的审查日志、阅读进度等过程记录和代码放在一起。</div><div><span class="lbl">之后</span>main 只有新 pipeline 和正式文档。旧代码保存在分支 <code>archive/upstream-main-2026-11-13</code>，过程记录保存在分支 <code>codex/pr1-architecture</code>；只属于旧代码的依赖已删除。</div><div class="why">负责人决定：保持 main 干净，以后迁移旧代码时从备份分支取。</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>我自己和验证者都跑过的检查</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>检查</th><th>作用</th><th>最新结果</th></tr></thead>
+        <tbody>
+          <tr><td><code>uv run ruff check .</code></td><td>代码规范和常见错误</td><td>通过</td></tr>
+          <tr><td><code>uv run ruff format --check .</code></td><td>代码格式统一</td><td>24 个文件格式正确</td></tr>
+          <tr><td><code>uv run pytest tests/ -v</code></td><td>全部自动测试</td><td class="num">354 passed</td></tr>
+          <tr><td><code>git diff --check</code></td><td>多余空白等提交前问题</td><td>通过</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="small muted">完整记录：每轮发现、我的处理和双方实际运行的命令都在分支 <code>codex/pr1-architecture</code> 的 <code>docs/pr1/REVIEW_LOG.md</code>。上表是合入 main 后的结果。</p>
+  </section>
+
+  <section>
+    <h2>风险和下一步</h2>
+    <ul>
+      <li><strong>没测过的场景</strong>：外接硬盘拔出或断电、大数据量下启动扫描耗时、多进程同时写、非 CPython 环境、Python 3.10 以上的日期解析。</li>
+      <li><strong>PR2</strong>：运行记录、检查点和文件清单；写锁等待超时；启动配置记录写入数据库；再确认是否支持只读记录输入。</li>
+      <li><strong>PR3</strong>：可续传下载、导入旧归档、旧代码迁移清单。</li>
+      <li><strong>PR4</strong>：跨行跨文件质量检查和隔离流程（如盘口交叉、序列缺口）。</li>
+      <li><strong>PR5–PR7</strong>：两家交易所的真实适配器、实时盘口录制和每秒行情。</li>
+    </ul>
+  </section>
+
+  <footer>
+    依据：分支 codex/pr1-architecture 上的 docs/pr1/REVIEW_LOG.md、docs/pr1/CODE_READING_PROGRESS.md，以及 main 上的代码和 docs/SCHEMA_GUIDE.md，整理于 2026-11-13。
+  </footer>
+</main>
+</body>
+</html>

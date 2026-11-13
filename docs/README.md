@@ -12,6 +12,7 @@
 | `agent/` | 项目权威总览和 agent 角色规则 |
 | `docs/` | 长期有效的正式文档：数据基础规则、数据契约及其规则说明 |
 | `docs/adr/` | 架构决策记录（ADR），已接受的 ADR 不改写，新决定写新 ADR |
+| `docs/reports/` | 每个 PR 合并后的总结汇报（HTML），面向需要了解结果和风险的读者 |
 | `src/config/` | 配置模块自带的使用、开发和演进文档 |
 
 ## 文档清单
@@ -44,6 +45,7 @@
 | [`docs/FOUNDATION_RULES.md`](FOUNDATION_RULES.md) | 负责人确认的数据基础规则（分层、时间、版本、审核、看板等），补充 `agent/PROJECT.md` |
 | [`docs/SCHEMAS.md`](SCHEMAS.md) | 数据契约字段及规则（由 registry 生成，路径不要移动） |
 | [`docs/SCHEMA_GUIDE.md`](SCHEMA_GUIDE.md) | 数据契约规则逐项说明、关键选择及已知限制 |
+| [`docs/reports/PR1_REPORT.html`](reports/PR1_REPORT.html) | PR1 汇报：结论与风险、重要配置说明、每轮代码设计改动和证据（在浏览器中打开） |
 | [`docs/adr/ADR-001-v1-architecture.md`](adr/ADR-001-v1-architecture.md) | ADR-001：单机、版本化数据 pipeline（已接受） |
 | [`docs/adr/ADR-002-pr1-foundation.md`](adr/ADR-002-pr1-foundation.md) | ADR-002：PR1 基础设施和契约补充决定（已接受） |
 
