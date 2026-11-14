@@ -6,11 +6,15 @@ import fcntl
 import json
 import logging
 import os
+import threading
+import time
 from pathlib import Path
 
 import pytest
 
-from src.data_io.layout import DataLayout, WriteBoundaryError, WriterRole
+from src.config import ConfigError, PipelineConfig
+from src.config.loader import DEFAULT_CONFIG_DIR
+from src.data_io.layout import DataLayout, ScopedWriter, WriteBoundaryError, WriterRole
 
 
 def test_same_receipt_retry_and_distinct_receipts(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
@@ -463,27 +467,98 @@ def test_corrupt_partial_metadata_is_rejected_without_modifying_evidence(tmp_pat
     assert payload.read_bytes() == b"evidence"
 
 
-def test_lock_timeout_waits_then_fails_or_succeeds(tmp_path: Path) -> None:
-    import threading
-    import time
+def _hold_lock(root: Path):
+    handle = (root / ".writer.lock").open("r+")
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    return handle
 
-    DataLayout.create(tmp_path)
+
+@pytest.mark.parametrize("value", [-1, 3601, True, 1.5, "1"])
+def test_invalid_lock_timeout_rejected_for_layout_and_writer(tmp_path: Path, value: object) -> None:
+    layout = DataLayout.create(tmp_path)
     with pytest.raises(WriteBoundaryError, match="lock_timeout_seconds"):
-        DataLayout.create(tmp_path, lock_timeout_seconds=-1)
-    with (tmp_path / ".writer.lock").open("r+") as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        DataLayout.create(tmp_path, lock_timeout_seconds=value)
+    writer = ScopedWriter(root=layout.root, role=WriterRole.NORMALIZER, lock_timeout_seconds=value)
+    with pytest.raises(WriteBoundaryError, match="lock_timeout_seconds"):
+        writer.write_new("silver/x", b"x")
+    assert not (tmp_path / "silver/x").exists()
+
+
+def test_create_waits_for_lock_then_fails_without_change(tmp_path: Path) -> None:
+    DataLayout.create(tmp_path)
+    partial = tmp_path / "silver/.partial-abandoned"
+    partial.write_bytes(b"partial")
+    handle = _hold_lock(tmp_path)
+    try:
         start = time.monotonic()
         with pytest.raises(WriteBoundaryError, match="waited 1s"):
             DataLayout.create(tmp_path, lock_timeout_seconds=1)
-        assert time.monotonic() - start >= 0.9
-        threading.Timer(0.2, lambda: fcntl.flock(lock.fileno(), fcntl.LOCK_UN)).start()
+        assert 0.9 <= time.monotonic() - start < 3
+        assert partial.read_bytes() == b"partial"
+        assert not list((tmp_path / "recovery").rglob("*.bin"))
+        timer = threading.Timer(0.2, lambda: fcntl.flock(handle.fileno(), fcntl.LOCK_UN))
+        timer.start()
         layout = DataLayout.create(tmp_path, lock_timeout_seconds=2)
+        timer.join()
+    finally:
+        handle.close()
+    assert not partial.exists()
     assert layout.writer(WriterRole.NORMALIZER).lock_timeout_seconds == 2
 
 
-@pytest.mark.parametrize("value", ["-1", "3601", "abc", "1.5"])
-def test_invalid_lock_timeout_environment_rejected(tmp_path: Path, value: str) -> None:
-    from src.config import ConfigError, PipelineConfig
+def test_write_waits_for_lock_then_fails_or_succeeds(tmp_path: Path) -> None:
+    writer = DataLayout.create(tmp_path, lock_timeout_seconds=1).writer(WriterRole.NORMALIZER)
+    handle = _hold_lock(tmp_path)
+    try:
+        start = time.monotonic()
+        with pytest.raises(WriteBoundaryError, match="waited 1s"):
+            writer.write_new("silver/trades/a", b"data")
+        assert 0.9 <= time.monotonic() - start < 3
+        assert list((tmp_path / "silver").iterdir()) == []
+        timer = threading.Timer(0.2, lambda: fcntl.flock(handle.fileno(), fcntl.LOCK_UN))
+        timer.start()
+        assert writer.write_new("silver/trades/a", b"data").read_bytes() == b"data"
+        timer.join()
+    finally:
+        handle.close()
 
+
+@pytest.mark.parametrize("value", ["-1", "3601", "abc", "1.5", "\uff11"])
+def test_invalid_lock_timeout_environment_rejected(tmp_path: Path, value: str) -> None:
     with pytest.raises(ConfigError, match="PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS"):
         PipelineConfig.load(environ={"DATA_ROOT": str(tmp_path), "PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS": value})
+
+
+def test_lock_timeout_sources(tmp_path: Path) -> None:
+    environ = {"DATA_ROOT": str(tmp_path)}
+    loaded = PipelineConfig.load(environ=environ)
+    assert loaded.writer_lock_timeout_seconds == 0
+    assert loaded.effective_settings()["settings"]["writer_lock_timeout_seconds"]["source"] == "default:runtime.json"
+    override = PipelineConfig.load(environ={**environ, "PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS": " 0030 "})
+    assert override.writer_lock_timeout_seconds == 30
+    assert (
+        override.effective_settings()["settings"]["writer_lock_timeout_seconds"]["source"]
+        == "environment:PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS"
+    )
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "storage.json").write_text('{"min_free_gib": 0}', encoding="utf-8")
+    (config_dir / "runtime.json").write_text('{"log_level": "INFO"}', encoding="utf-8")
+    missing = PipelineConfig.load(config_dir=config_dir, environ=environ)
+    assert missing.writer_lock_timeout_seconds == 0
+    assert missing.effective_settings()["settings"]["writer_lock_timeout_seconds"]["source"] == "default:model"
+    (config_dir / "runtime.json").write_text(
+        '{"log_level": "INFO", "writer_lock_timeout_seconds": 7}', encoding="utf-8"
+    )
+    assert PipelineConfig.load(config_dir=config_dir, environ=environ).writer_lock_timeout_seconds == 7
+    for invalid in ("-1", "3601", "true", "1.5", '"1"'):
+        (config_dir / "runtime.json").write_text(
+            f'{{"log_level": "INFO", "writer_lock_timeout_seconds": {invalid}}}', encoding="utf-8"
+        )
+        with pytest.raises(ConfigError, match="PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS"):
+            PipelineConfig.load(config_dir=config_dir, environ=environ)
+
+
+def test_json_default_matches_model_default() -> None:
+    runtime = json.loads((DEFAULT_CONFIG_DIR / "runtime.json").read_text(encoding="utf-8"))
+    assert runtime["writer_lock_timeout_seconds"] == PipelineConfig.model_fields["writer_lock_timeout_seconds"].default

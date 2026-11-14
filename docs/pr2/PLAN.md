@@ -25,6 +25,7 @@
 | A5 | 初始化时仍完整扫描全部层和 recovery，不缩小扫描范围。 | 正确性优先；缩小范围可能漏掉 partial。 | 数据量大时初始化变慢；见后续建议。 |
 | A6 | `run_id` 形如 `20261113t120000z-<12位十六进制>`，符合 Bronze `receipt_id` 规则，可直接作为接收身份。 | 便于排序和追溯。 | — |
 | A7 | 运行结束先在账本中写最终状态，再由 REGISTRY writer 发布 `manifests/runs/<run_id>/record.json`（及默认的 `report.md`）。记录内容完全来自账本，可重新生成。 | 账本是权威；中断时 audit 能发现“已结束但缺记录”。 | — |
+| A9 | `writer_lock_timeout_seconds` 除 `runtime.json` 外还有模型默认值 `0`；缺字段时来源记为 `default:model`，测试保证两处默认值一致。 | `0` 即 PR1 行为，普遍安全；自定义配置目录和直接构造不必修改。 | 两处默认值需保持一致（已有测试）。 |
 | A8 | 新增只读 `audit` 命令：核对 manifest 文件是否存在、校验和是否一致，报告未登记文件、遗留 partial、未结束运行和缺失的运行记录；只报告，不修改。 | FOUNDATION_RULES §8“文件已写入但 checkpoint 未推进时须检查”；PROJECT §11 可排查性。 | 每次全量计算校验和，数据大时较慢。 |
 
 ## 4. 代码块与验收示例

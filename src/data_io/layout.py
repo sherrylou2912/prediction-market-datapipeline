@@ -24,6 +24,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 
+from src.config.validation import MAX_LOCK_TIMEOUT_SECONDS
+
 logger = logging.getLogger(__name__)
 
 
@@ -86,6 +88,9 @@ def _mkdir(parent: Path, name: str) -> Path:
 
 @contextmanager
 def _lock(root: Path, timeout_seconds: int = 0) -> Iterator[None]:
+    # Checked here so direct DataLayout/ScopedWriter construction is covered too.
+    if type(timeout_seconds) is not int or not 0 <= timeout_seconds <= MAX_LOCK_TIMEOUT_SECONDS:
+        raise WriteBoundaryError(f"lock_timeout_seconds must be an integer from 0 to {MAX_LOCK_TIMEOUT_SECONDS}")
     path = root / ".writer.lock"
     fd = None
     try:
@@ -353,8 +358,6 @@ class DataLayout:
 
     @classmethod
     def create(cls, root: Path, *, lock_timeout_seconds: int = 0) -> DataLayout:
-        if type(lock_timeout_seconds) is not int or not 0 <= lock_timeout_seconds <= 3600:
-            raise WriteBoundaryError("lock_timeout_seconds must be an integer from 0 to 3600")
         try:
             resolved_root = root.resolve(strict=True)
             if not resolved_root.is_dir():
@@ -395,6 +398,8 @@ class ScopedWriter:
             raise WriteBoundaryError("Target name is reserved for incomplete writes")
         if relative.parts[0] != self.role.value:
             raise WriteBoundaryError(f"{self.role.name} writer may only write under {self.role.value}/: {path}")
+        if len(relative.parts) == 2 and relative.parts[0] == "manifests" and relative.name.startswith("ledger.sqlite3"):
+            raise WriteBoundaryError(f"Target name is reserved for the ledger: {path}")
         if self.role == WriterRole.COLLECTOR:
             if (
                 not isinstance(receipt_id, str)

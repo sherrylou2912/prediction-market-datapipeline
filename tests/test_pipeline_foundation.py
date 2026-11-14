@@ -47,6 +47,11 @@ from src.data_schema.contracts import (
         ("config_dir", "/absolute/string", "PIPELINE_CONFIG_DIR must be an absolute Path"),
         ("config_dir", None, "PIPELINE_CONFIG_DIR must be an absolute Path"),
         ("config_dir", Path("/invalid\x00config"), "PIPELINE_CONFIG_DIR must not contain NUL"),
+        ("writer_lock_timeout_seconds", -1, "PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS must be an integer from 0 to 3600"),
+        ("writer_lock_timeout_seconds", 3601, "PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS"),
+        ("writer_lock_timeout_seconds", True, "PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS"),
+        ("writer_lock_timeout_seconds", 1.5, "PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS"),
+        ("writer_lock_timeout_seconds", "1", "PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS"),
     ],
 )
 def test_direct_config_and_reconstruction_reject_invalid_fields(

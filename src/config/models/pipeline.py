@@ -149,7 +149,7 @@ class PipelineConfig(ConfigModel):
             raise ConfigError("DATA_MIN_FREE_GIB is too large to parse.") from exc
         raw_level = values.get("PIPELINE_LOG_LEVEL", "").strip()
         raw_timeout = values.get("PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS", "").strip()
-        if raw_timeout and (not raw_timeout.isascii() or not raw_timeout.isdecimal() or len(raw_timeout) > 4):
+        if raw_timeout and (not raw_timeout.isascii() or not raw_timeout.isdecimal()):
             raise ConfigError("PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS must be an integer from 0 to 3600.")
         config = cls(
             data_root=Path(raw_root).expanduser(),
@@ -169,7 +169,9 @@ class PipelineConfig(ConfigModel):
             else "default:src/config/defaults",
             "writer_lock_timeout_seconds": "environment:PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS"
             if raw_timeout
-            else "default:runtime.json",
+            else "default:runtime.json"
+            if "writer_lock_timeout_seconds" in runtime.model_fields_set
+            else "default:model",
         }
         config._sources = tuple(sources.items())
         return config

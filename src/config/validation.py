@@ -30,7 +30,7 @@ MAX_LOCK_TIMEOUT_SECONDS = 3600
 
 def _lock_timeout_seconds(value: Any) -> int:
     if type(value) is not int or not 0 <= value <= MAX_LOCK_TIMEOUT_SECONDS:
-        raise PydanticCustomError("config_lock_timeout", "must be an integer from 0 to 3600")
+        raise PydanticCustomError("config_lock_timeout", f"must be an integer from 0 to {MAX_LOCK_TIMEOUT_SECONDS}")
     return value
 
 
@@ -50,7 +50,7 @@ _SAFE_ERROR_MESSAGES = {
     "config_path_nul": "must not contain NUL characters",
     "config_nonnegative_integer": "must be a nonnegative integer",
     "config_log_level": "must be DEBUG, INFO, WARNING, ERROR, or CRITICAL",
-    "config_lock_timeout": "must be an integer from 0 to 3600",
+    "config_lock_timeout": f"must be an integer from 0 to {MAX_LOCK_TIMEOUT_SECONDS}",
     "extra_forbidden": "unknown configuration field",
     "missing": "is required",
     "model_type": "must be a valid dictionary or model",

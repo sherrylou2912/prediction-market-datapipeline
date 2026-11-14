@@ -28,7 +28,7 @@
 | `config_dir` | `load(config_dir=...)`、`PIPELINE_CONFIG_DIR` 或 `src/config/defaults/` | 本次实际使用的默认配置目录。 |
 | `writer_lock_timeout_seconds` | `PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS` 或 `defaults/runtime.json` | 写锁被占用时最多等待的秒数，`0`–`3600` 的整数；`0` 表示立即失败（PR1 行为）。超时后报 `WriteBoundaryError`，数据不变。写任务把它传给 `DataLayout.create(root, lock_timeout_seconds=...)`。 |
 
-仅 `PipelineConfig` 共享环境设置可由环境变量覆盖；venue、quality、execution 和 task 等参数从 JSON 与 CLI 获取。优先级为：进程环境变量 > 本机 `.env` > version-controlled JSON default。配置目录另有显式参数优先：`load(config_dir=...)` > `PIPELINE_CONFIG_DIR` > 默认目录。空的覆盖值回退到 JSON 默认值；`DATA_ROOT` 没有默认值。`DATA_MIN_FREE_GIB` 的环境覆盖值只接受 ASCII 十进制数字字符串，可带首尾空白；不接受正负号或下划线。JSON 中须是非负整数，不接受布尔值。`PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS` 同样只接受 ASCII 十进制数字，取值 0–3600。`runtime.json` 缺少该字段时使用模型默认值 `0`；直接构造 `PipelineConfig` 时也默认为 `0`。
+仅 `PipelineConfig` 共享环境设置可由环境变量覆盖；venue、quality、execution 和 task 等参数从 JSON 与 CLI 获取。优先级为：进程环境变量 > 本机 `.env` > version-controlled JSON default。配置目录另有显式参数优先：`load(config_dir=...)` > `PIPELINE_CONFIG_DIR` > 默认目录。空的覆盖值回退到 JSON 默认值；`DATA_ROOT` 没有默认值。`DATA_MIN_FREE_GIB` 的环境覆盖值只接受 ASCII 十进制数字字符串，可带首尾空白；不接受正负号或下划线。JSON 中须是非负整数，不接受布尔值。`PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS` 同样只接受 ASCII 十进制数字，取值 0–3600。`runtime.json` 缺少该字段时使用模型默认值 `0`，来源记为 `default:model`；直接构造 `PipelineConfig` 时也默认为 `0`（来源 `direct`）。
 
 正常调用 `PipelineConfig.load()` 时，会读取默认 `.env`。显式传入 `environ` 且未传 `env_file` 时，不读取本机默认 `.env`，便于隔离测试；若同时显式传入 `env_file`，则先读取该文件，再由 `environ` 中的同名值覆盖。`.env` 的 `${变量}` 插值仅使用传入的 `environ` 和文件中此前已定义的值，同名时 `environ` 优先；没有传入 `environ` 时使用实际进程环境。文件中未定义且环境不存在的变量展开为空字符串，`${变量:-默认值}` 使用给定默认值。配置 JSON 的同一对象和 `.env` 文件均不允许重复键；格式无法解析时直接报错。
 
