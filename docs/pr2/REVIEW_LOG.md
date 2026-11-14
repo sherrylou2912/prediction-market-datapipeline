@@ -345,3 +345,75 @@ Analyst 检查（B2/B3/B4 修复后，主工作区）：`uv run ruff check .` �
 - Round result: `changes requested`
 
 Analyst 检查（Round 2 修复后）：`uv run ruff check .` → All checks passed；`uv run ruff format --check .` → 通过；`uv run pytest tests/ -q` → 424 passed。
+
+## Block B3 · Round 3 · 2026-11-13
+
+- Revision: `codex/pr2-run-ledger` @ `0ab20e7`（`git diff 1167712..0ab20e7 -- src/data_io/runs.py tests/test_runs.py src/data_io/ledger.py`）；files: `src/data_io/runs.py`、`tests/test_runs.py`，以及 `src/data_io/ledger.py` 中已采纳的 B2 suggestion（B2-R2-1、B2-R2-3），另有 WAL 检查和父目录软链接检查（与 B4 交叉）。B4 的其余改动不在本轮范围。
+- 审查方式：在 `/private/tmp/pr2-review-b3-r3` 以 `git worktree add --detach 0ab20e7` 检出运行，结束后已移除。
+- Checks run by Reviewer（worktree 内，CPython 3.9.6）：
+  - `uv run ruff check .` → All checks passed!
+  - `uv run ruff format --check .` → 30 files already formatted
+  - `uv run pytest tests/ -q` → 424 passed in 6.76s
+  - `uv run pytest tests/test_ledger.py tests/test_runs.py -q` → 38 passed
+  - 探测（`PYTHONPATH=. uv run python <scratchpad>/probe_r3.py`）：用相对路径的 root 调用 `Ledger.open_read_only` → 原生 `ValueError: relative path can't be expressed as a file URI`；root 路径含空格、`?`、`#`、`%` 时只读打开正常。
+
+### Previous findings
+| ID | Status | Evidence |
+| --- | --- | --- |
+| B3-R2-1 | resolved | `runs.py` 的 `__exit__` 按 `_state` 区分两种情况：最终状态没写入时报 “remains marked running”；状态已写入、只是 record 未发布时报 “was recorded as failed, but its run record was not published”，日志与抛出的 `LedgerError` 文案一致。新测试 `test_exit_with_unpublishable_record_reports_failed_status` 断言错误消息、日志内容和账本中的 `failed` 状态；原测试改为匹配 “remains marked running” 文案。两者均通过。 |
+| B3-R1-6 | out-of-scope（未变） | 交给 B4 或后续 PR。 |
+| B3-R1-7 | out-of-scope（未变） | 交给 PR3。 |
+
+### New findings
+| ID | Severity | Location | Finding | Suggested direction |
+| --- | --- | --- | --- | --- |
+| B2-R3-1 | suggestion | `src/data_io/ledger.py` `open_read_only`（`path.as_uri()`） | 采纳 B2-R2-1 改用 `mode=rw` URI 后，`Path.as_uri()` 要求绝对路径。用相对 root 直接调用时抛原生 `ValueError`，不是 `LedgerError`；改动之前相对路径可以正常工作。唯一的调用方（`audit`，经 `validate_for_read()`）传入的是已解析的绝对路径，因此当前没有实际影响，只是接口契约（只抛 `LedgerError`）有缺口。 | 使用 `path.absolute().as_uri()`（或先 `root.resolve()`），并补一个相对路径的测试。 |
+
+B2 的其他新增代码复核后无问题：`COMMIT` 失败后的 `ROLLBACK` 已包住并报出 `LedgerError`；`mode=rw` 不会创建缺失的文件，且写者能正常等待（`test_concurrent_reader_does_not_fail_a_commit` 通过）；WAL 头字节（偏移 18–19 为 2）与 `-wal`/`-shm` 文件的检查正确；`manifests` 父目录为软链接时拒绝。WAL 与软链接的拒绝场景由 B4 的 `tests/test_audit.py` 覆盖。
+
+### Analyst response
+| ID | Action (fixed / disputed / deferred-to-owner) | Detail and checks |
+| --- | --- | --- |
+| B2-R3-1 | fixed（采纳） | 改为 `path.absolute().as_uri()`；`test_read_only_open_accepts_a_relative_root`。 |
+
+- Round result: `converged`（B3 所有 must-fix/should-fix 已解决，没有新的 must-fix/should-fix；lint、format 和全量测试均由 Reviewer 亲自运行并通过。B2 保持 converged，B2-R3-1 只是 suggestion，交给 Reporter）
+
+## Block B4 · Round 3 · 2026-11-13
+
+- Revision: `codex/pr2-run-ledger` @ `0ab20e7`；本块相关文件：`src/data_io/audit.py`、`src/data_io/ledger.py`（`open_read_only`、`_check_file`）、`tests/test_audit.py`、`README.md`、`src/config/README.md`、`docs/adr/ADR-003-pr2-sqlite-ledger.md`。
+- 审查方式：在 `/private/tmp/pr2-b4-review-r3` 以 `git worktree add --detach 0ab20e7` 检出，结束后已移除。探测数据只放在本会话 scratchpad 的专用目录中，结束后按确切路径删除。
+- Checks run by Reviewer（均在上述 worktree 内）：
+  - `uv run ruff check .` → All checks passed!
+  - `uv run ruff format --check .` → 30 files already formatted
+  - `uv run pytest tests/ -q` → 424 passed in 6.67s
+  - `uv run pytest tests/test_audit.py -q` → 10 passed
+  - 临时探测脚本（scratchpad，未入库）。每项都对 `DATA_ROOT` 做含 SHA-256 的快照，在 `main(["audit"])` 前后比较：
+    1. 真实 hot journal → 返回 2，提示 “Ledger has a rollback journal …”，快照无差异。
+    2. WAL 标志留在文件头中、没有 `-wal`/`-shm`（与 R2 探测 2 相同）→ 返回 2，快照无差异。WAL 连接仍打开、`-wal`/`-shm` 都存在 → 返回 2，快照无差异。
+    3. 0 字节账本 → 返回 2（`Unsupported ledger schema version 0`），快照无差异。
+    4. `gold/` 和 `recovery/conflicts/` 权限 000 → 返回 1，报告 `scan_error:gold` 和 `scan_error:recovery/conflicts`，审计继续。
+    5. `manifests/` 是软链接 → 返回 2（`Ledger directory must not be a symbolic link`）。
+    6. audit 连接持有读事务 1 秒，其间写者执行 `Run.start` + `finish` → 约 1.09s 后成功。
+    7. 干净目录 → 返回 0，快照无差异。
+    8. **文档所说的 WAL 恢复路径**：外部把账本切到 WAL 并关闭后，执行写路径 `Ledger.open(layout)`。文件头确实变回 DELETE（`0101`），但 `manifests/ledger.sqlite3-shm`（32768 字节）留了下来。此后 `main(["audit"])` 一直返回 2（“is in WAL mode or has WAL files”），写任务也不会删除这个 `-shm`。另外确认：账本头为 DELETE、只有遗留 `-shm` 时，`mode=rw` + `query_only` 连接读取后，所有文件（含 `-shm`）的 size/mtime/SHA-256 都不变（见 B4-R3-1）。
+
+### Previous findings
+| ID | Status | Evidence |
+| --- | --- | --- |
+| B4-R2-1 | resolved | `open_read_only` 检查文件头第 18、19 字节以及 `-wal`/`-shm`，WAL 账本在连接前就被拒绝；探测 2 两种形态都返回 2 且快照无差异；`test_wal_mode_ledger_is_refused_without_writing` 通过。拒绝条件过宽带来的新问题见 B4-R3-1。 |
+| B4-R2-2 | resolved | 只读连接改为 `file:…?mode=rw`，不会新建缺失的账本；`test_read_only_open_never_creates_a_missing_ledger` 通过；`audit.py` 和 `open_read_only` 的 docstring 已把“写者在检查与首次读取之间崩溃”写成剩余的窄窗口，不再是绝对表述。 |
+| B4-R2-3 | resolved | `_walk` 的 `onerror` 改为记录 `scan_error` 并继续（探测 4，`test_unreadable_directory_is_reported_and_audit_continues`）；`_check_file` 拒绝软链接的 `manifests/`（探测 5）。B4-R1-5 的剩余部分随之解决。 |
+
+### New findings
+| ID | Severity | Location | Finding | Suggested direction |
+| --- | --- | --- | --- | --- |
+| B4-R3-1 | should-fix | `src/data_io/ledger.py`（`open_read_only` 中 `any(item.exists() … for item in wal_files)` 的条件）；`README.md:85`、`src/config/README.md:55`、ADR-003 中“下一个写任务会以 DELETE 模式重新打开”的说法 | 只要 `-shm` 存在就拒绝，这个条件过宽，而文档给出的恢复方法也不成立。账本被外部切到 WAL 后，写路径 `Ledger.open` 确实把文件头改回 DELETE，但 SQLite 在 macOS 上留下了 `ledger.sqlite3-shm`，写任务也不会删除它。之后 audit 每次都返回 2，只能人工删除 `-shm`（探测 8）。而 DELETE 模式下遗留的 `-shm` 对只读连接无害，读取不会改动任何文件（探测 8）。真正有风险的是文件头为 WAL，或存在 `-wal`（SQLite 打开时发现 `-wal` 会进入 WAL 处理）。用户照 README 操作仍然无法使用 audit。 | 只在文件头为 WAL 或存在 `-wal` 时拒绝；文件头为 DELETE 且只有 `-shm` 时允许打开，并在报告中加一条 `ledger_stale_shm` 之类的提示，或者只在文档中说明。另一种做法：保留现有拒绝，但更正文档，写明还需人工删除 `-shm`，并由写路径 `_configure` 在切回 DELETE 后清理它（这属于 B2 代码，需协调）。加测试：WAL → `Ledger.open` → 关闭 → audit 返回 0 或给出明确的指引。 |
+
+### Analyst response
+| ID | Action (fixed / disputed / deferred-to-owner) | Detail and checks |
+| --- | --- | --- |
+| B4-R3-1 | fixed（待负责人决定是否开第 4 轮复核） | 只读打开只在文件头为 WAL 或存在 `-wal` 时拒绝，遗留 `-shm` 允许；`test_leftover_shm_after_returning_to_delete_mode_is_allowed`（WAL → 写路径打开 → 审计 ok 且文件不变）。README、`src/config/README.md`、ADR-003 同步修改。 |
+
+- Round result: `escalated`。B4 已达 3 轮上限，仍有 1 个 should-fix（B4-R3-1）未关闭。所有 B4-R1、B4-R2 的发现都已解决；lint、format 和全量测试（424 passed）均由 Reviewer 亲自运行并通过。B4-R3-1 只在“账本曾被外部工具切到 WAL”这一越出契约的情况下出现，不影响正常写入路径，也不会写入数据；但文档给出的恢复步骤会失效，audit 会一直无法使用。Reviewer 的立场：修改很小（拒绝条件改为“文件头为 WAL 或存在 `-wal`”，并加一条测试），建议再修一次后由 Reviewer 确认；也可由负责人接受为已知限制，只更正文档。请 Reporter 交负责人决定。
+
+Analyst 检查（B2-R3-1、B4-R3-1 修复后）：`uv run ruff check .` 通过；`uv run ruff format --check .` 通过；`uv run pytest tests/ -q` → 426 passed。

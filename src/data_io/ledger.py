@@ -322,18 +322,20 @@ class Ledger:
                 header = handle.read(20)
         except OSError as exc:
             raise LedgerError(f"Cannot read ledger header {path}: {exc}") from exc
-        wal_files = [path.with_name(path.name + suffix) for suffix in ("-wal", "-shm")]
-        # Bytes 18-19 are 2 in WAL mode; a WAL reader creates -wal/-shm files.
-        if header[18:20] == b"\x02\x02" or any(item.exists() or item.is_symlink() for item in wal_files):
+        wal = path.with_name(path.name + "-wal")
+        # Bytes 18-19 are 2 in WAL mode, where a reader creates -wal/-shm files.
+        # A leftover -shm alone (SQLite may keep it after switching back to
+        # DELETE mode) is not read or changed in DELETE mode, so it is allowed.
+        if header[18:20] == b"\x02\x02" or wal.exists() or wal.is_symlink():
             raise LedgerError(
-                f"Ledger {path} is in WAL mode or has WAL files; the ledger must use journal_mode=DELETE. "
+                f"Ledger {path} is in WAL mode or has a WAL file; the ledger must use journal_mode=DELETE. "
                 "A write task reopens it in DELETE mode."
             )
         try:
             # mode=rw never creates a missing file (unlike a plain path) and,
             # unlike mode=ro, lets concurrent writers wait normally.
             connection = sqlite3.connect(
-                f"{path.as_uri()}?mode=rw", uri=True, timeout=MIN_BUSY_TIMEOUT_SECONDS, isolation_level=None
+                f"{path.absolute().as_uri()}?mode=rw", uri=True, timeout=MIN_BUSY_TIMEOUT_SECONDS, isolation_level=None
             )
             connection.execute("PRAGMA query_only = ON")
             version = connection.execute("PRAGMA user_version").fetchone()[0]

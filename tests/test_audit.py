@@ -220,3 +220,21 @@ def test_unreadable_directory_is_reported_and_audit_continues(tmp_path: Path) ->
         blocked.chmod(0o755)
     assert _kinds(report) == ["scan_error", "unregistered_file"]
     assert report["issues"][0]["path"] == "bronze/blocked"
+
+
+def test_leftover_shm_after_returning_to_delete_mode_is_allowed(tmp_path: Path) -> None:
+    import sqlite3
+
+    layout, _ = _clean_run(tmp_path)
+    connection = sqlite3.connect(tmp_path / "manifests/ledger.sqlite3")
+    connection.execute("PRAGMA journal_mode = WAL")
+    connection.close()
+    Ledger.open(layout).close()  # the write path switches back to DELETE mode
+    shm = tmp_path / "manifests/ledger.sqlite3-shm"
+    if not shm.exists():
+        shm.write_bytes(b"\0" * 32768)  # SQLite on some platforms leaves it behind
+    assert not (tmp_path / "manifests/ledger.sqlite3-wal").exists()
+    before = _snapshot(tmp_path)
+    report = audit(tmp_path)
+    assert report["ok"] and report["ledger"] == "present"
+    assert _snapshot(tmp_path) == before

@@ -282,3 +282,10 @@ def test_non_delete_journal_mode_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(LedgerError, match="journal mode must be DELETE"):
         Ledger(tmp_path, KeepsWal(), read_only=False)._configure()
+
+
+def test_read_only_open_accepts_a_relative_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _start(tmp_path)[1].close()
+    monkeypatch.chdir(tmp_path.parent)
+    with Ledger.open_read_only(Path(tmp_path.name)) as ledger:
+        assert ledger.get_run("run-1")["status"] == "running"
