@@ -2,7 +2,7 @@
 
 Status: Accepted for v1
 
-部分决定由 [ADR-002](ADR-002-pr1-foundation.md) 补充。
+部分决定由 [ADR-002](ADR-002-pr1-foundation.md) 和 [ADR-003](ADR-003-pr2-sqlite-ledger.md) 补充；账本暂用 SQLite 见 ADR-003。
 
 Date: 2026-10-14
 

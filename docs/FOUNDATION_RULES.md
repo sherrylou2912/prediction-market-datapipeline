@@ -2,7 +2,7 @@
 
 本文记录项目负责人确认的基础设计，供所有数据任务使用。项目总体权威文件是 [`agent/PROJECT.md`](../agent/PROJECT.md)，配置结构以 [`src/config/developing.md`](../src/config/developing.md) 为基线。
 
-**状态：设计规则，不代表能力已实现。** 目前已实现配置、目录写入边界、数据契约和模拟 adapter；不能据此认定本文所有规则已经生效。尚未实现真实下载、真实 venue adapter、PostgreSQL 账本、完整隔离审核流程、分钟聚合、回测引擎或 HTML 看板。真实数据覆盖、API 细节、存储格式兼容性与吞吐量需要在对应工作中验证。
+**状态：设计规则，不代表能力已实现。** 目前已实现配置、目录写入边界、数据契约、模拟 adapter，以及 SQLite 运行账本、manifest、checkpoint 和只读 audit；不能据此认定本文所有规则已经生效。尚未实现真实下载、真实 venue adapter、PostgreSQL 账本（目前用 SQLite，见 ADR-003）、完整隔离审核流程、分钟聚合、回测引擎或 HTML 看板。真实数据覆盖、API 细节、存储格式兼容性与吞吐量需要在对应工作中验证。
 
 ## 1. 目标与范围
 
@@ -97,7 +97,7 @@ DATA_ROOT/gold/<venue>/<market_id>/market_1m/<data_version>/YYYYMMDD.parquet
 
 数据任务和研究实验都需要机器可读的 `record.json`；人可读的 `report.md` 默认生成，可通过参数关闭。JSON 仍要包含必要的状态、结果和失败信息。两类记录均包含运行标识、时间、代码版本、影响结果的非敏感配置、输入和实际规则版本；未提交代码需明确记录，未知信息不能编造。数据任务补充范围、输出和数量；实验补充问题、方法、数据版本、参数、结论及限制。
 
-未来 PostgreSQL 作为运行、checkpoint 和 manifest 的账本；JSON 为可读取、可复现的运行记录，Markdown 为人可读报告，以 `run_id` 等标识关联。文件与账本的一致性、崩溃后的恢复由后续设计实现。checkpoint 只能在数据文件可靠写入、通过适用验证并登记 manifest 后前进；问题记录也须可靠保存。文件已写入但 checkpoint 未推进时，恢复流程须检查并处理，不能丢失数据或产生不受控重复。
+运行、checkpoint 和 manifest 的账本目前用 SQLite（`DATA_ROOT/manifests/ledger.sqlite3`，ADR-003），以后可换 PostgreSQL；JSON 为可读取、可复现的运行记录，Markdown 为人可读报告，以 `run_id` 等标识关联。manifest 登记与 checkpoint 推进在同一事务中完成；文件发布与登记之间中断时，只读 `audit` 命令会报告未登记文件，自动恢复由后续设计实现。checkpoint 只能在数据文件可靠写入、通过适用验证并登记 manifest 后前进；问题记录也须可靠保存。文件已写入但 checkpoint 未推进时，恢复流程须检查并处理，不能丢失数据或产生不受控重复。
 
 未来采用一个本地服务配合 HTML 交互式看板，供选择 venue、市场、时间和指标。打开时不加载全部历史数据，按需读取所选范围和列，放大后再加载所需细节；汇总方式和缺失须清楚呈现。看板显示数据及规则版本、覆盖情况和相关 caveat。初期查看已入库历史数据，不要求实时刷新；可手动导出当前图表，不为每个 Parquet 文件自动生成静态图。大数据查询、嵌套 dictionary 的 Parquet 兼容性和性能都需要真实规模测试，不能仅凭设计保证。
 

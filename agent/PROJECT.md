@@ -40,9 +40,9 @@ This document describes the project and planned PRs, not proof of implementation
 | Historical + streaming raw data | 保留带来源信息的原始内容和文件，按来源选择格式 | 不强制所有输入转成 JSON，保留原始证据 |
 | Normalized data | Partitioned Parquet | Fast scans by date/market |
 | Research queries | DuckDB | Serverless, single-machine |
-| Checkpoints / runs / manifests | PostgreSQL | Ledger database |
+| Checkpoints / runs / manifests | SQLite（`DATA_ROOT/manifests/ledger.sqlite3`），接口可换 PostgreSQL（ADR-003，负责人决定 2026-11-13） | Ledger database |
 | Scheduling | Plain CLI + systemd/cron (adopt Dagster once stable) | Simple first |
-| Observability | Structured logs + PostgreSQL run records + metrics | — |
+| Observability | Structured logs + ledger run records + metrics | — |
 | Message queue | No Kafka in v1 | Not needed at this scale |
 | Iceberg / ClickHouse | Interface reserved, not adopted in v1 | — |
 
@@ -114,7 +114,7 @@ Every run must leave a complete audit trail:
 - **File manifest**: path, row count, schema version, min/max event time, min/max source sequence, checksum, primary-key hash, creating run ID.
 - **Raw record envelope**: venue, source, message_type, source_event_id, event_time, received_at, ingested_at, sequence, api_version, protocol_version, schema_version, raw_payload / raw_bytes（JSON 原文与原始字节恰好填写一种）。
 
-原始数据也可能来自非 venue 来源或原始文件；缺失或不适用的来源信息不能编造。Bronze 已保存内容不得静默改写；未来归档或清理必须有可核查的清单并经负责人确认，保留审核与追溯记录。每个运行的机器可读记录使用 JSON；人可读 Markdown 默认生成，可由任务设置关闭。PostgreSQL 账本、JSON 记录和文件的一致性与中断恢复属于后续实现。
+原始数据也可能来自非 venue 来源或原始文件；缺失或不适用的来源信息不能编造。Bronze 已保存内容不得静默改写；未来归档或清理必须有可核查的清单并经负责人确认，保留审核与追溯记录。每个运行的机器可读记录使用 JSON；人可读 Markdown 默认生成，可由任务设置关闭。账本先用 SQLite（ADR-003）；manifest 登记和 checkpoint 推进在同一事务中完成，运行结束发布 `manifests/runs/<run_id>/record.json`。文件发布与账本登记之间中断时由只读 `audit` 命令报告，自动恢复属于后续实现。
 
 ## 7. Second-Level Book Storage Strategy
 

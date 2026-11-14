@@ -122,7 +122,7 @@ defaults + profiles + job/experiment + environment/CLI
 → run record 完成记录
 ```
 
-解析后的运行快照不写回 `src/config/`，而应进入 `DATA_ROOT/manifests/runs/<run_id>/` 或未来 PostgreSQL run registry。
+解析后的运行快照不写回 `src/config/`，而应进入 `DATA_ROOT/manifests/runs/<run_id>/` 以及运行账本（目前为 SQLite，见 ADR-003）。
 
 ## 强制规则
 

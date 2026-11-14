@@ -44,7 +44,15 @@
 uv run python -m src check
 ```
 
-它只加载配置并检查 `DATA_ROOT` 是否适合作为目录，不检查磁盘空间、不试写，也不创建目录。开始检查前，它在日志级别允许 `INFO` 时向 stderr 输出一条 JSON 日志（`event` 为 `config.effective`）：`details.settings` 列出每个字段的生效值及来源（如 `environment:DATA_ROOT`、`default:storage.json`、`argument:config_dir`；直接构造的对象为 `direct`），`details.sha256` 是生效值的哈希（不含来源，同样的值得到同样的哈希）。`PipelineConfig` 不含 secrets，因此全部字段都会输出；`.env` 中的其他变量不会出现在日志中。之后的任务应在产生副作用前复用 `PipelineConfig.effective_settings()` 记录同样内容。
+它只加载配置并检查 `DATA_ROOT` 是否适合作为目录，不检查磁盘空间、不试写，也不创建目录。开始检查前，它在日志级别允许 `INFO` 时向 stderr 输出一条 JSON 日志（`event` 为 `config.effective`）：`details.settings` 列出每个字段的生效值及来源（如 `environment:DATA_ROOT`、`default:storage.json`、`argument:config_dir`；直接构造的对象为 `direct`），`details.sha256` 是生效值的哈希（不含来源，同样的值得到同样的哈希）。`PipelineConfig` 不含 secrets，因此全部字段都会输出；`.env` 中的其他变量不会出现在日志中。写任务通过 `Run.start()`（`src/data_io/runs.py`）把同样内容写进账本和运行记录 `record.json`，不受日志级别影响。
+
+只读对账命令：
+
+```bash
+uv run python -m src audit
+```
+
+它调用 `validate_for_read()`，只读打开账本，核对已登记文件的校验和，并报告未登记文件、遗留 partial、软链接、`recovery/` 中待处理文件、未结束的运行和缺失的运行记录；不创建目录、不写任何文件。没有问题返回 0，有问题返回 1 并输出 JSON 报告，启动或读取错误返回 2。
 
 只读任务在读取数据前调用：
 
@@ -65,6 +73,8 @@ config = PipelineConfig.load()
 root = config.validate_for_write()
 layout = DataLayout.create(root, lock_timeout_seconds=config.writer_lock_timeout_seconds)
 ```
+
+需要登记运行、manifest 和 checkpoint 的写任务在此之后使用 `Run.start(layout, config, RunSpec(...))`，见 `src/data_io/runs.py` 的模块说明。
 
 写预检检查空间、试写和硬链接支持；逐层创建目录时同步每一层的父目录，确保目录项进入文件系统同步流程。macOS 上 `/Volumes/<卷名>` 本身必须是实际挂载点，卷名不能为软链接，无法确认时拒绝写入；检查也覆盖大小写变体和路径软链接指向的卷；该路径不接受 `..`。卷目录下更深的软链接仍被解析，可能指向其他卷；使用外接盘时须检查解析后的 `DATA_ROOT`。其他系统不对 `/Volumes` 特判。预检失败时，仅从最深层开始移除本次新建且仍为空的目录，并同步受影响的父目录；已有目录和文件不会删除，无法清理或同步的目录会出现在错误信息中。真实断电行为仍需在实际设备上验证。
 

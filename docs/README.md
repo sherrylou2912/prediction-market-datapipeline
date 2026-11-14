@@ -2,7 +2,7 @@
 
 `main` 分支上所有 Markdown 文档的位置和用途。新增正式文档时放进下表对应的位置，并在这里登记。
 
-`main` 只放正式文档。审查日志、代码阅读进度、计划、负责人笔记等过程记录放在各 PR 工作分支的 `docs/pr<N>/` 下，合并后保留该分支作为审计记录：PR1 的过程记录在分支 `codex/pr1-architecture`。旧代码和旧流程文档在分支 `archive/upstream-main-2026-11-13`。
+`main` 只放正式文档。审查日志、代码阅读进度、计划、负责人笔记等过程记录放在各 PR 工作分支的 `docs/pr<N>/` 下，合并后保留该分支作为审计记录：PR1 的过程记录在分支 `codex/pr1-architecture`，PR2 的在分支 `codex/pr2-run-ledger`。旧代码和旧流程文档在分支 `archive/upstream-main-2026-11-13`。
 
 ## 目录约定
 
@@ -48,6 +48,7 @@
 | [`docs/reports/PR1_REPORT.html`](reports/PR1_REPORT.html) | PR1 汇报：结论与风险、重要配置说明、每轮代码设计改动和证据（在浏览器中打开） |
 | [`docs/adr/ADR-001-v1-architecture.md`](adr/ADR-001-v1-architecture.md) | ADR-001：单机、版本化数据 pipeline（已接受） |
 | [`docs/adr/ADR-002-pr1-foundation.md`](adr/ADR-002-pr1-foundation.md) | ADR-002：PR1 基础设施和契约补充决定（已接受） |
+| [`docs/adr/ADR-003-pr2-sqlite-ledger.md`](adr/ADR-003-pr2-sqlite-ledger.md) | ADR-003：SQLite 运行账本、写锁等待和运行记录（已接受） |
 
 ### 配置模块
 

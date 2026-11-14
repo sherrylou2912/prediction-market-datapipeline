@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased (PR2)
+
+### Added
+
+- SQLite ledger at `DATA_ROOT/manifests/ledger.sqlite3` for runs, file manifests, and checkpoints (ADR-003). Manifest registration re-hashes the file, takes the schema version from the contract registry, and advances a checkpoint in the same transaction with optimistic versioning and history.
+- Run lifecycle (`src/data_io/runs.py`): `Run.start`, `commit_file`, `add_counts`, `finish`; publishes `manifests/runs/<run_id>/record.json` and an optional `report.md` with code version, effective configuration, parameters, counts, files, and checkpoints.
+- `python -m src audit`: read-only reconciliation of files against the ledger.
+- `writer_lock_timeout_seconds` (`PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS`, 0–3600, default 0): writers, layout initialization, and ledger transactions wait up to this many seconds for a held lock.
+
+### Changed
+
+- The `REGISTRY` writer rejects `manifests/ledger.sqlite3*` targets.
+
 ## 0.1.0 — 2026-11-13
 
 First version of the pipeline foundation (PR #1). No venue data is downloaded yet.

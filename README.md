@@ -4,7 +4,7 @@ This repository contains the foundation of a new, versioned prediction-market da
 
 ## Current scope
 
-The pipeline foundation currently provides configuration loading, startup checks, six data layers with scoped writers, Bronze/Silver/Gold row contracts, a venue adapter interface, and a network-free mock adapter. It does not download venue data, create PostgreSQL tables, or commit files and checkpoints together. Future work begins when the project owner authorizes the next PR.
+The pipeline foundation currently provides configuration loading, startup checks, six data layers with scoped writers, Bronze/Silver/Gold row contracts, a venue adapter interface, a network-free mock adapter, and a SQLite ledger that registers runs, file manifests, and checkpoints, plus a read-only `audit` command. It does not download venue data yet. Future work begins when the project owner authorizes the next PR.
 
 ## Source layout
 
@@ -15,9 +15,9 @@ The pipeline foundation currently provides configuration loading, startup checks
 | `src/config/` | Load configuration and check its values and the data disk. |
 | `src/config/defaults/` | Editable, version-controlled non-secret defaults. |
 | `src/data_schema/` | Versioned Bronze, Silver, and Gold row contracts. |
-| `src/data_io/` | Create data directories and restrict each writer to its assigned layer. |
+| `src/data_io/` | Create data directories, restrict each writer to its assigned layer, and keep the run/manifest/checkpoint ledger. |
 | `src/adapters/` | Venue interface and a deterministic mock implementation. |
-| `src/cli.py`, `src/__main__.py` | The non-writing `python -m src check` configuration command. |
+| `src/cli.py`, `src/__main__.py` | The non-writing `python -m src check` and `python -m src audit` commands. |
 
 There is no real data loader yet. `src/data_io/` contains the directory and writer foundation for future loading work.
 
@@ -64,9 +64,25 @@ After a write job passes `validate_for_write()`, it calls `DataLayout.create()` 
 | `VALIDATOR` | `quarantine/` |
 | `REGISTRY` | `manifests/` |
 
-A `COLLECTOR` write uses the receipt ID as the file's immediate parent directory, such as `bronze/source/run-1/file.jsonl`, and supplies the same `receipt_id`. Receipt IDs must match `[a-z0-9][a-z0-9_-]*`; invalid IDs are rejected rather than silently changed, preventing case or Unicode aliases. The writer rejects paths outside its layer, traversal, symlink escapes, and nested mounts on a different device. A byte-identical retry of the same receipt succeeds; conflicting data is retained in `recovery/` and raises an error. Recovery metadata references its expected `.bin` payload; a JSON record without that payload is an incomplete recovery, and layout initialization logs it for review. Initialization checks recovery metadata and matching payload checksums and stops on inconsistencies without overwriting evidence. Publication uses a temporary sibling and a hard link. A writer call does not yet register a manifest or advance a checkpoint.
+A `COLLECTOR` write uses the receipt ID as the file's immediate parent directory, such as `bronze/source/run-1/file.jsonl`, and supplies the same `receipt_id`. Receipt IDs must match `[a-z0-9][a-z0-9_-]*`; invalid IDs are rejected rather than silently changed, preventing case or Unicode aliases. The writer rejects paths outside its layer, traversal, symlink escapes, and nested mounts on a different device. A byte-identical retry of the same receipt succeeds; conflicting data is retained in `recovery/` and raises an error. Recovery metadata references its expected `.bin` payload; a JSON record without that payload is an incomplete recovery, and layout initialization logs it for review. Initialization checks recovery metadata and matching payload checksums and stops on inconsistencies without overwriting evidence. Publication uses a temporary sibling and a hard link. A writer call alone does not register a manifest or advance a checkpoint; use the run ledger below.
 
 Directory preparation retries the parent-directory sync even when a prior attempt left the directory behind. Recovery rejects partial metadata that lacks a valid original modification time or does not mark integrity as unknown; rebuilt metadata for an orphaned payload retains unknown integrity without inventing the original modification time.
+
+## Runs, manifests, and checkpoints
+
+The ledger is a SQLite file at `DATA_ROOT/manifests/ledger.sqlite3` ([ADR-003](docs/adr/ADR-003-pr2-sqlite-ledger.md); PostgreSQL can replace it later). A write task wraps its work in a run:
+
+```python
+with Run.start(layout, config, RunSpec(task="mock_backfill", task_version="1")) as run:
+    run.commit_file(WriterRole.NORMALIZER, "silver/trades/x.parquet", payload,
+                    FileFacts(dataset="silver.trades", row_count=2, validation="contract per row"),
+                    CheckpointAdvance(key="mock/trades", cursor="page-2", expected_version=0))
+    run.finish("succeeded")  # or "partial" / "failed"
+```
+
+`commit_file` publishes the file durably, then in one ledger transaction registers its manifest entry (checksum and size computed by the ledger, schema version from the contract registry) and advances the checkpoint. A checkpoint whose current version differs from `expected_version` is not advanced and nothing is registered. `finish` stores the final status, then publishes `manifests/runs/<run_id>/record.json` and `report.md` built from the ledger; the record contains the code commit and uncommitted-change flag, the effective configuration with its sources and hash, parameters, counts, files, and checkpoints. An exception inside the `with` block records the run as `failed`.
+
+If a process stops between publishing a file and registering it, the file stays unregistered. `uv run python -m src audit` is read-only and reports unregistered or changed files, abandoned partials, pending recovery payloads, unfinished runs, and missing run records; it exits 0 when clean, 1 with issues, and 2 on errors. `imports/` and `quarantine/` are not registered or audited yet.
 
 ## Data contracts and adapter interface
 
