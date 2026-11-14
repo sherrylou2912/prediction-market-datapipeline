@@ -26,6 +26,7 @@ src/config/
 | `min_free_gib` | `int` | 非负且不能是布尔值，只在写任务 preflight 中使用。 |
 | `log_level` | `str` | 仅允许五种 Python 标准日志级别，并标准化为大写。 |
 | `config_dir` | `Path` | 必须是绝对路径；`load()` 须能读取其中两个默认 JSON。 |
+| `writer_lock_timeout_seconds` | `int` | 0–3600，不接受布尔值；默认 `0`（立即失败），因为它就是 PR1 的行为，普遍安全。约束为 `validation.py` 的 `LockTimeoutSeconds`。 |
 
 `PipelineConfig` 是不可变 pydantic 模型；字段和约束定义在 `models/pipeline.py` 和 `validation.py`。直接构造和 `load()` 都校验类型、路径形式及取值，不检查磁盘容量、试写或创建目录；`load()` 会读取配置文件和可能存在的 `.env`。读写 preflight 负责环境检查；写预检创建目录后同步其父目录，清理目录后也同步父目录；macOS 写预检检查路径与软链接展开中出现的 `/Volumes/<卷名>`（大小写不敏感），要求卷本身是挂载点且不能是软链接，无法确认时拒绝写入，其他平台不特判 `/Volumes`。要修改已解析对象，应以 `PipelineConfig(**{**config.model_dump(), "字段": 新值})` 重新构造并校验；不要用不重新校验更新值的 `model_copy(update=...)`。
 

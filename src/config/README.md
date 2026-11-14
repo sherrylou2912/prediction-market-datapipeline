@@ -7,7 +7,7 @@
 | 位置 | 内容 |
 | --- | --- |
 | `src/config/defaults/storage.json` | 写任务开始前要求的最小剩余空间，默认 `200` GiB。 |
-| `src/config/defaults/runtime.json` | 默认日志级别，当前为 `INFO`。 |
+| `src/config/defaults/runtime.json` | 默认日志级别（`INFO`）和写锁等待秒数（`writer_lock_timeout_seconds`，`0`）。 |
 | `.env` | 整台机器共享的全局设置与 secrets；受 Git 忽略，不存放任务参数。 |
 | `.env.example` | 可用环境变量名称，不含真实 secret。 |
 | `src/config/models/pipeline.py` | `PipelineConfig` 设计图纸及数据目录预检。 |
@@ -26,8 +26,9 @@
 | `min_free_gib` | `DATA_MIN_FREE_GIB` 或 `defaults/storage.json` | 写任务开始前的最小剩余空间。 |
 | `log_level` | `PIPELINE_LOG_LEVEL` 或 `defaults/runtime.json` | 运行日志级别。 |
 | `config_dir` | `load(config_dir=...)`、`PIPELINE_CONFIG_DIR` 或 `src/config/defaults/` | 本次实际使用的默认配置目录。 |
+| `writer_lock_timeout_seconds` | `PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS` 或 `defaults/runtime.json` | 写锁被占用时最多等待的秒数，`0`–`3600` 的整数；`0` 表示立即失败（PR1 行为）。超时后报 `WriteBoundaryError`，数据不变。写任务把它传给 `DataLayout.create(root, lock_timeout_seconds=...)`。 |
 
-仅 `PipelineConfig` 共享环境设置可由环境变量覆盖；venue、quality、execution 和 task 等参数从 JSON 与 CLI 获取。优先级为：进程环境变量 > 本机 `.env` > version-controlled JSON default。配置目录另有显式参数优先：`load(config_dir=...)` > `PIPELINE_CONFIG_DIR` > 默认目录。空的覆盖值回退到 JSON 默认值；`DATA_ROOT` 没有默认值。`DATA_MIN_FREE_GIB` 的环境覆盖值只接受 ASCII 十进制数字字符串，可带首尾空白；不接受正负号或下划线。JSON 中须是非负整数，不接受布尔值。
+仅 `PipelineConfig` 共享环境设置可由环境变量覆盖；venue、quality、execution 和 task 等参数从 JSON 与 CLI 获取。优先级为：进程环境变量 > 本机 `.env` > version-controlled JSON default。配置目录另有显式参数优先：`load(config_dir=...)` > `PIPELINE_CONFIG_DIR` > 默认目录。空的覆盖值回退到 JSON 默认值；`DATA_ROOT` 没有默认值。`DATA_MIN_FREE_GIB` 的环境覆盖值只接受 ASCII 十进制数字字符串，可带首尾空白；不接受正负号或下划线。JSON 中须是非负整数，不接受布尔值。`PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS` 同样只接受 ASCII 十进制数字，取值 0–3600。`runtime.json` 缺少该字段时使用模型默认值 `0`；直接构造 `PipelineConfig` 时也默认为 `0`。
 
 正常调用 `PipelineConfig.load()` 时，会读取默认 `.env`。显式传入 `environ` 且未传 `env_file` 时，不读取本机默认 `.env`，便于隔离测试；若同时显式传入 `env_file`，则先读取该文件，再由 `environ` 中的同名值覆盖。`.env` 的 `${变量}` 插值仅使用传入的 `environ` 和文件中此前已定义的值，同名时 `environ` 优先；没有传入 `environ` 时使用实际进程环境。文件中未定义且环境不存在的变量展开为空字符串，`${变量:-默认值}` 使用给定默认值。配置 JSON 的同一对象和 `.env` 文件均不允许重复键；格式无法解析时直接报错。
 
@@ -62,7 +63,7 @@ from src.data_io.layout import DataLayout
 
 config = PipelineConfig.load()
 root = config.validate_for_write()
-layout = DataLayout.create(root)
+layout = DataLayout.create(root, lock_timeout_seconds=config.writer_lock_timeout_seconds)
 ```
 
 写预检检查空间、试写和硬链接支持；逐层创建目录时同步每一层的父目录，确保目录项进入文件系统同步流程。macOS 上 `/Volumes/<卷名>` 本身必须是实际挂载点，卷名不能为软链接，无法确认时拒绝写入；检查也覆盖大小写变体和路径软链接指向的卷；该路径不接受 `..`。卷目录下更深的软链接仍被解析，可能指向其他卷；使用外接盘时须检查解析后的 `DATA_ROOT`。其他系统不对 `/Volumes` 特判。预检失败时，仅从最深层开始移除本次新建且仍为空的目录，并同步受影响的父目录；已有目录和文件不会删除，无法清理或同步的目录会出现在错误信息中。真实断电行为仍需在实际设备上验证。
@@ -89,6 +90,7 @@ uv run pytest tests/ -v
 | `DATA_ROOT has no existing parent` | 检查路径及挂载是否可访问。 |
 | `must not contain NUL characters` | 移除路径中的 NUL 字符。 |
 | `DATA_MIN_FREE_GIB` 或 `PIPELINE_LOG_LEVEL` 不合法 | 分别填写非负十进制整数或 DEBUG、INFO、WARNING、ERROR、CRITICAL。 |
+| `PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS must be an integer from 0 to 3600` | 填写 0–3600 的十进制整数。 |
 | `Cannot check free disk space` | 检查数据目录所在卷和访问权限。 |
 | `DATA_ROOT volume is not mounted` | 确认 `/Volumes` 下指定卷是实际挂载点且卷名不是软链接，然后重试。 |
 | `DATA_ROOT does not support hard links` | 使用支持硬链接的文件系统。 |
