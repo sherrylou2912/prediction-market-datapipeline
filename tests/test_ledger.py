@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from src.data_io import ledger as ledger_module
 from src.data_io.layout import DataLayout, WriteBoundaryError, WriterRole
 from src.data_io.ledger import LEDGER_SCHEMA_VERSION, CheckpointAdvance, FileFacts, Ledger, LedgerError
 from src.data_schema.contracts import SCHEMA_VERSION
@@ -64,7 +65,7 @@ def test_commit_registers_manifest_and_advances_checkpoint(tmp_path: Path) -> No
     checkpoint = ledger.get_checkpoint("mock/trades")
     assert checkpoint["version"] == 1 and checkpoint["cursor"] == {"cursor": "p2"} and checkpoint["last_file"] == path
     path2 = _publish(layout, "silver/trades/b.parquet")
-    ledger.commit("run-1", path2, _facts(), CheckpointAdvance("mock/trades", 5, expected_version=1))
+    ledger.commit("run-1", path2, _facts(), CheckpointAdvance("mock/trades", 5, expected_version=1, watermark=T0))
     assert ledger.get_checkpoint("mock/trades")["version"] == 2
     assert [row["version"] for row in ledger.checkpoint_history("run-1")] == [1, 2]
     assert ledger.get_run("run-1")["rows_written"] == 6
@@ -198,7 +199,8 @@ def test_registry_writer_cannot_create_ledger_files(tmp_path: Path) -> None:
             writer.write_new(name, b"x")
 
 
-def test_held_ledger_lock_fails_without_change(tmp_path: Path) -> None:
+def test_held_ledger_lock_fails_without_change(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ledger_module, "MIN_BUSY_TIMEOUT_SECONDS", 0)
     layout, ledger = _start(tmp_path)
     path = _publish(layout)
     blocker = sqlite3.connect(tmp_path / "manifests/ledger.sqlite3", isolation_level=None)
@@ -211,3 +213,72 @@ def test_held_ledger_lock_fails_without_change(tmp_path: Path) -> None:
         blocker.close()
     assert _tables(ledger) == (0, 0, 0)
     ledger.commit("run-1", path, _facts())
+
+
+def test_case_variant_path_cannot_register_the_same_file_twice(tmp_path: Path) -> None:
+    layout, ledger = _start(tmp_path)
+    path = _publish(layout)
+    ledger.commit("run-1", path, _facts(), CheckpointAdvance("k", 1, expected_version=0))
+    variant = "silver/trades/A.parquet"
+    if not (tmp_path / variant).exists():
+        pytest.skip("filesystem is case-sensitive")
+    with pytest.raises(LedgerError, match="exact name"):
+        ledger.commit("run-1", variant, _facts(), CheckpointAdvance("k", 2, expected_version=1))
+    assert _tables(ledger) == (1, 1, 3)
+
+
+def test_watermark_cannot_move_backwards_or_disappear(tmp_path: Path) -> None:
+    layout, ledger = _start(tmp_path)
+    ledger.commit("run-1", _publish(layout), _facts(), CheckpointAdvance("k", 1, expected_version=0, watermark=T0))
+    for index, watermark in enumerate((T0 - timedelta(seconds=1), None)):
+        path = _publish(layout, f"silver/trades/b{index}.parquet")
+        with pytest.raises(LedgerError, match="backwards"):
+            ledger.commit("run-1", path, _facts(), CheckpointAdvance("k", 2, expected_version=1, watermark=watermark))
+    assert _tables(ledger) == (1, 1, 3)
+
+
+def test_concurrent_reader_does_not_fail_a_commit(tmp_path: Path) -> None:
+    import threading
+    import time
+
+    layout, ledger = _start(tmp_path)
+    path = _publish(layout)
+    holding = threading.Event()
+    errors: list[BaseException] = []
+
+    def read_slowly() -> None:
+        try:
+            reader = Ledger.open_read_only(tmp_path)
+            reader._connection.execute("BEGIN")
+            reader.runs()
+            holding.set()
+            time.sleep(0.5)
+            reader._connection.execute("COMMIT")
+            reader.close()
+        except BaseException as exc:  # surfaced in the main thread below
+            errors.append(exc)
+            holding.set()
+
+    thread = threading.Thread(target=read_slowly)
+    thread.start()
+    holding.wait(5)
+    ledger.commit("run-1", path, _facts())  # waits for the reader instead of failing
+    thread.join()
+    assert errors == [] and _tables(ledger)[0] == 1
+
+
+def test_rollback_after_sqlite_auto_rollback_keeps_original_error(tmp_path: Path) -> None:
+    _, ledger = _start(tmp_path)
+    with pytest.raises(LedgerError, match="boom"), ledger._transaction() as connection:
+        connection.execute("ROLLBACK")
+        raise sqlite3.OperationalError("boom")
+    assert not ledger._connection.in_transaction
+
+
+def test_non_delete_journal_mode_is_rejected(tmp_path: Path) -> None:
+    class KeepsWal:
+        def execute(self, sql: str) -> sqlite3.Cursor:
+            return sqlite3.connect(":memory:").execute("SELECT 'wal'" if "journal_mode" in sql else "SELECT 1")
+
+    with pytest.raises(LedgerError, match="journal mode must be DELETE"):
+        Ledger(tmp_path, KeepsWal(), read_only=False)._configure()

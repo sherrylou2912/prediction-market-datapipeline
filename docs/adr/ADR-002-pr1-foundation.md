@@ -3,6 +3,7 @@
 - 状态：已接受（2026-11-13 合入 main）
 - 日期：2026-11-09
 - 补充：[ADR-001](ADR-001-v1-architecture.md)
+- 后续：写锁等待已由 [ADR-003](ADR-003-pr2-sqlite-ledger.md) 实现
 
 ## 数据持久性
 

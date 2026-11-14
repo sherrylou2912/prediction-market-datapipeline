@@ -12,6 +12,7 @@ it later (ADR-003).
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 from collections.abc import Iterator, Mapping
@@ -29,6 +30,10 @@ LEDGER_SCHEMA_VERSION = 1
 RUN_STATUSES = ("running", "succeeded", "partial", "failed")
 FINAL_RUN_STATUSES = ("succeeded", "partial", "failed")
 _MANIFEST_LAYERS = ("bronze", "silver", "gold")
+# SQLite holds short internal locks for every read and commit, including the
+# read-only audit. Waiting at least this long keeps a concurrent reader from
+# failing a commit even when writer_lock_timeout_seconds is 0.
+MIN_BUSY_TIMEOUT_SECONDS = 5
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
 _SCHEMA = """
@@ -171,6 +176,91 @@ def _row(cursor: sqlite3.Cursor, row: tuple) -> dict[str, Any]:
     return {column[0]: value for column, value in zip(cursor.description, row)}
 
 
+def run_values(
+    *,
+    run_id: str,
+    task: str,
+    task_version: str,
+    started_at: datetime,
+    code_version: Mapping[str, Any],
+    config: Mapping[str, Any],
+    parameters: Mapping[str, Any],
+    venue: str | None = None,
+    dataset: str | None = None,
+    range_start: datetime | None = None,
+    range_end: datetime | None = None,
+) -> tuple:
+    """Validate run fields without touching the ledger; returns the row values."""
+    for name, value in (("code_version", code_version), ("config", config), ("parameters", parameters)):
+        if not isinstance(value, Mapping):
+            raise LedgerError(f"{name} must be a mapping")
+    values = (
+        _text(run_id, "run_id"),
+        _text(task, "task"),
+        _text(task_version, "task_version"),
+        _text(venue, "venue", optional=True),
+        _text(dataset, "dataset", optional=True),
+        None if range_start is None else utc_text(range_start, "range_start"),
+        None if range_end is None else utc_text(range_end, "range_end"),
+        utc_text(started_at, "started_at"),
+        json_text(dict(code_version), "code_version"),
+        json_text(dict(config), "config"),
+        json_text(dict(parameters), "parameters"),
+    )
+    if range_start is not None and range_end is not None and range_start >= range_end:
+        raise LedgerError("range_start must be earlier than range_end")
+    return values
+
+
+def commit_values(path: str | Path, facts: FileFacts, checkpoint: CheckpointAdvance | None) -> dict[str, Any]:
+    """Validate a commit's arguments without touching the file or the ledger."""
+    relative = Path(path)
+    if not isinstance(facts, FileFacts):
+        raise LedgerError("facts must be a FileFacts value")
+    try:
+        get_contract(facts.dataset)
+    except (ContractError, TypeError) as exc:
+        raise LedgerError(f"Unknown dataset contract: {facts.dataset!r}") from exc
+    layer = facts.dataset.split(".", 1)[0]
+    if layer not in _MANIFEST_LAYERS:
+        raise LedgerError(f"Dataset layer cannot be registered in this ledger: {layer}")
+    if (
+        relative.is_absolute()
+        or ".." in relative.parts
+        or len(relative.parts) < 2
+        or relative.parts[0] != layer
+        or relative.name.startswith(".partial-")
+    ):
+        raise LedgerError(f"{facts.dataset} file must be a root-relative path under {layer}/: {path}")
+    row_count = _count(facts.row_count, "row_count")
+    validation = _text(facts.validation, "validation")
+    min_time, max_time = _range(facts.event_time_range, "event_time_range", utc_text)
+    min_sequence, max_sequence = _range(facts.sequence_range, "sequence_range", _sequence)
+    pk_hash = facts.primary_key_hash
+    if pk_hash is not None and (not isinstance(pk_hash, str) or not _SHA256.fullmatch(pk_hash)):
+        raise LedgerError("primary_key_hash must be a lowercase SHA-256 hex digest or None")
+    if checkpoint is not None:
+        if not isinstance(checkpoint, CheckpointAdvance):
+            raise LedgerError("checkpoint must be a CheckpointAdvance value")
+        checkpoint_key = _text(checkpoint.key, "checkpoint key")
+        expected = _count(checkpoint.expected_version, "expected_version")
+        cursor_text = json_text(checkpoint.cursor, "checkpoint cursor")
+        watermark = None if checkpoint.watermark is None else utc_text(checkpoint.watermark, "watermark")
+    else:
+        checkpoint_key = expected = cursor_text = watermark = None
+    return {
+        "relative": relative,
+        "row_count": row_count,
+        "validation": validation,
+        "times": (min_time, max_time),
+        "sequences": (min_sequence, max_sequence),
+        "pk_hash": pk_hash,
+        "checkpoint": None
+        if checkpoint is None
+        else {"key": checkpoint_key, "expected": expected, "cursor": cursor_text, "watermark": watermark},
+    }
+
+
 class Ledger:
     """One connection to the ledger. Not shared across threads."""
 
@@ -186,7 +276,10 @@ class Ledger:
         existed = cls._check_file(layout.root, path, required=False)
         try:
             connection = sqlite3.connect(
-                str(path), timeout=layout.lock_timeout_seconds, isolation_level=None, check_same_thread=True
+                str(path),
+                timeout=max(layout.lock_timeout_seconds, MIN_BUSY_TIMEOUT_SECONDS),
+                isolation_level=None,
+                check_same_thread=True,
             )
         except sqlite3.Error as exc:
             raise LedgerError(f"Cannot open ledger {path}: {exc}") from exc
@@ -203,12 +296,27 @@ class Ledger:
 
     @classmethod
     def open_read_only(cls, root: Path) -> Ledger | None:
-        """Open an existing ledger without creating or changing anything; None if absent."""
+        """Open an existing ledger for queries only; None if absent.
+
+        A normal connection with ``query_only`` is used instead of ``mode=ro``:
+        a ``mode=ro`` reader makes a concurrent writer fail with a misleading
+        disk I/O error instead of waiting. Like any SQLite reader, it rolls back
+        the journal of an interrupted, uncommitted transaction (SQLite's own
+        crash recovery), so opening is refused while a journal file exists.
+        """
         path = root / LEDGER_RELATIVE_PATH
         if not cls._check_file(root, path, required=False):
             return None
+        journal = path.with_name(path.name + "-journal")
+        if journal.exists() or journal.is_symlink():
+            # Opening would let SQLite roll back the journal, which is a write.
+            raise LedgerError(
+                f"Ledger has a rollback journal ({journal}): a write transaction is running or was interrupted. "
+                "Run read-only commands when no writer is active; if no writer is running, the next write task "
+                "lets SQLite roll back the interrupted transaction."
+            )
         try:
-            connection = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True, isolation_level=None)
+            connection = sqlite3.connect(str(path), timeout=MIN_BUSY_TIMEOUT_SECONDS, isolation_level=None)
             connection.execute("PRAGMA query_only = ON")
             version = connection.execute("PRAGMA user_version").fetchone()[0]
         except sqlite3.Error as exc:
@@ -245,15 +353,13 @@ class Ledger:
 
     def _configure(self) -> None:
         try:
-            for pragma in (
-                "PRAGMA foreign_keys = ON",
-                "PRAGMA journal_mode = DELETE",
-                "PRAGMA synchronous = FULL",
-                "PRAGMA fullfsync = ON",
-            ):
+            for pragma in ("PRAGMA foreign_keys = ON", "PRAGMA synchronous = FULL", "PRAGMA fullfsync = ON"):
                 self._connection.execute(pragma)
+            mode = self._connection.execute("PRAGMA journal_mode = DELETE").fetchone()[0]
         except sqlite3.Error as exc:
             raise LedgerError(f"Cannot configure ledger: {exc}") from exc
+        if str(mode).lower() != "delete":
+            raise LedgerError(f"Ledger journal mode must be DELETE, but SQLite kept {mode!r}")
 
     def _initialize(self) -> None:
         with self._transaction() as connection:
@@ -281,7 +387,15 @@ class Ledger:
         try:
             yield connection
         except BaseException as exc:
-            connection.execute("ROLLBACK")
+            # SQLite may already have rolled back by itself (e.g. disk full);
+            # a second ROLLBACK would raise and hide the original cause.
+            if connection.in_transaction:
+                try:
+                    connection.execute("ROLLBACK")
+                except sqlite3.Error as rollback_exc:
+                    raise LedgerError(
+                        f"Ledger transaction failed ({exc}) and rollback also failed: {rollback_exc}"
+                    ) from exc
             if isinstance(exc, sqlite3.Error):
                 raise LedgerError(f"Ledger transaction failed and was rolled back: {exc}") from exc
             raise
@@ -294,36 +408,10 @@ class Ledger:
 
     # Runs -----------------------------------------------------------------
 
-    def create_run(
-        self,
-        *,
-        run_id: str,
-        task: str,
-        task_version: str,
-        started_at: datetime,
-        code_version: Mapping[str, Any],
-        config: Mapping[str, Any],
-        parameters: Mapping[str, Any],
-        venue: str | None = None,
-        dataset: str | None = None,
-        range_start: datetime | None = None,
-        range_end: datetime | None = None,
-    ) -> None:
-        values = (
-            _text(run_id, "run_id"),
-            _text(task, "task"),
-            _text(task_version, "task_version"),
-            _text(venue, "venue", optional=True),
-            _text(dataset, "dataset", optional=True),
-            None if range_start is None else utc_text(range_start, "range_start"),
-            None if range_end is None else utc_text(range_end, "range_end"),
-            utc_text(started_at, "started_at"),
-            json_text(dict(code_version), "code_version"),
-            json_text(dict(config), "config"),
-            json_text(dict(parameters), "parameters"),
-        )
-        if range_start is not None and range_end is not None and range_start >= range_end:
-            raise LedgerError("range_start must be earlier than range_end")
+    def create_run(self, **fields: Any) -> None:
+        """Register a running run; see ``run_values`` for the accepted fields."""
+        values = run_values(**fields)
+        run_id = values[0]
         with self._transaction() as connection:
             if connection.execute("SELECT 1 FROM runs WHERE run_id = ?", (run_id,)).fetchone():
                 raise LedgerError(f"Run already exists: {run_id}")
@@ -378,6 +466,12 @@ class Ledger:
             raise LedgerError(f"Unknown run: {run_id}")
         return _row(cursor, row)
 
+    def require_running(self, run_id: str) -> None:
+        """Raise LedgerError unless ``run_id`` is registered and still running."""
+        status = self.get_run(run_id)["status"]
+        if status != "running":
+            raise LedgerError(f"Run {run_id} is already {status}")
+
     def _require_running(self, connection: sqlite3.Connection, run_id: str) -> None:
         status = self._fetch_run(connection, run_id)["status"]
         if status != "running":
@@ -393,48 +487,30 @@ class Ledger:
         The caller must have durably published the file (``ScopedWriter``) and
         validated its contents; ``facts.validation`` states which checks ran.
         """
-        relative = Path(path)
-        if not isinstance(facts, FileFacts):
-            raise LedgerError("facts must be a FileFacts value")
-        try:
-            get_contract(facts.dataset)
-        except (ContractError, TypeError) as exc:
-            raise LedgerError(f"Unknown dataset contract: {facts.dataset!r}") from exc
-        layer = facts.dataset.split(".", 1)[0]
-        if layer not in _MANIFEST_LAYERS:
-            raise LedgerError(f"Dataset layer cannot be registered in this ledger: {layer}")
-        if (
-            relative.is_absolute()
-            or ".." in relative.parts
-            or len(relative.parts) < 2
-            or relative.parts[0] != layer
-            or relative.name.startswith(".partial-")
-        ):
-            raise LedgerError(f"{facts.dataset} file must be a root-relative path under {layer}/: {path}")
-        row_count = _count(facts.row_count, "row_count")
-        validation = _text(facts.validation, "validation")
-        min_time, max_time = _range(facts.event_time_range, "event_time_range", utc_text)
-        min_sequence, max_sequence = _range(facts.sequence_range, "sequence_range", _sequence)
-        pk_hash = facts.primary_key_hash
-        if pk_hash is not None and (not isinstance(pk_hash, str) or not _SHA256.fullmatch(pk_hash)):
-            raise LedgerError("primary_key_hash must be a lowercase SHA-256 hex digest or None")
+        prepared = commit_values(path, facts, checkpoint)
+        relative = prepared["relative"]
+        row_count, validation, pk_hash = prepared["row_count"], prepared["validation"], prepared["pk_hash"]
+        min_time, max_time = prepared["times"]
+        min_sequence, max_sequence = prepared["sequences"]
         if checkpoint is not None:
-            if not isinstance(checkpoint, CheckpointAdvance):
-                raise LedgerError("checkpoint must be a CheckpointAdvance value")
-            checkpoint_key = _text(checkpoint.key, "checkpoint key")
-            expected = _count(checkpoint.expected_version, "expected_version")
-            cursor_text = json_text(checkpoint.cursor, "checkpoint cursor")
-            watermark = None if checkpoint.watermark is None else utc_text(checkpoint.watermark, "watermark")
-
+            checkpoint_key, expected = prepared["checkpoint"]["key"], prepared["checkpoint"]["expected"]
+            cursor_text, watermark = prepared["checkpoint"]["cursor"], prepared["checkpoint"]["watermark"]
         target = self.root / relative
         try:
             if target.is_symlink() or not target.is_file() or target.resolve(strict=True) != target:
                 raise LedgerError(f"Registered file must be a published regular file without symlinks: {relative}")
+            # On case-insensitive filesystems "A.parquet" also opens "a.parquet".
+            # Register only the exact directory entry names, so one file cannot
+            # be registered twice under different spellings.
+            parent = self.root
+            for part in relative.parts:
+                if part not in os.listdir(parent):
+                    raise LedgerError(f"Registered path must match the file's exact name on disk: {relative}")
+                parent = parent / part
             _require_same_device(self.root, target)
             checksum, size = _digest(target)
         except (OSError, WriteBoundaryError) as exc:
             raise LedgerError(f"Cannot read published file {relative}: {exc}") from exc
-        now = utc_text(datetime.now(timezone.utc), "registered_at")
         entry = {
             "path": str(relative),
             "run_id": run_id,
@@ -449,9 +525,11 @@ class Ledger:
             "size_bytes": size,
             "primary_key_hash": pk_hash,
             "validation": validation,
-            "registered_at": now,
+            "registered_at": None,
         }
         with self._transaction() as connection:
+            # Timestamps are taken while holding the ledger lock so they follow commit order.
+            now = entry["registered_at"] = utc_text(datetime.now(timezone.utc), "registered_at")
             self._require_running(connection, run_id)
             if connection.execute("SELECT 1 FROM manifest_files WHERE path = ?", (entry["path"],)).fetchone():
                 raise LedgerError(f"File is already registered: {relative}")
@@ -462,9 +540,14 @@ class Ledger:
             connection.execute("UPDATE runs SET rows_written = rows_written + ? WHERE run_id = ?", (row_count, run_id))
             if checkpoint is not None:
                 current = connection.execute(
-                    "SELECT version FROM checkpoints WHERE checkpoint_key = ?", (checkpoint_key,)
+                    "SELECT version, watermark FROM checkpoints WHERE checkpoint_key = ?", (checkpoint_key,)
                 ).fetchone()
                 current_version = 0 if current is None else current[0]
+                if current is not None and current[1] is not None and (watermark is None or watermark < current[1]):
+                    raise LedgerError(
+                        f"Checkpoint {checkpoint_key} watermark cannot move backwards or be removed; "
+                        "nothing was registered"
+                    )
                 if current_version != expected:
                     raise LedgerError(
                         f"Checkpoint {checkpoint_key} is at version {current_version}, expected {expected}; "
@@ -492,6 +575,17 @@ class Ledger:
         except sqlite3.Error as exc:
             raise LedgerError(f"Ledger query failed: {exc}") from exc
 
+    def snapshot(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Return (manifests, runs) read in one consistent transaction."""
+        try:
+            self._connection.execute("BEGIN")
+            try:
+                return self.manifests(), self.runs()
+            finally:
+                self._connection.execute("COMMIT")
+        except sqlite3.Error as exc:
+            raise LedgerError(f"Ledger query failed: {exc}") from exc
+
     def get_run(self, run_id: str) -> dict[str, Any]:
         rows = self._query("SELECT * FROM runs WHERE run_id = ?", (run_id,))
         if not rows:
@@ -516,7 +610,7 @@ class Ledger:
 
     def checkpoint_history(self, run_id: str) -> list[dict[str, Any]]:
         rows = self._query(
-            "SELECT * FROM checkpoint_history WHERE run_id = ? ORDER BY updated_at, checkpoint_key, version", (run_id,)
+            "SELECT * FROM checkpoint_history WHERE run_id = ? ORDER BY checkpoint_key, version", (run_id,)
         )
         for row in rows:
             row["cursor"] = json.loads(row["cursor"])

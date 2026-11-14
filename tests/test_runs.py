@@ -10,7 +10,7 @@ import pytest
 
 from src.config import PipelineConfig
 from src.data_io import runs as runs_module
-from src.data_io.layout import DataLayout, WriteBoundaryError, WriterRole
+from src.data_io.layout import DataLayout, WriterRole
 from src.data_io.ledger import CheckpointAdvance, FileFacts, Ledger, LedgerError
 from src.data_io.runs import Run, RunSpec, code_version, new_run_id
 from src.data_schema.contracts import SCHEMA_VERSION
@@ -77,37 +77,93 @@ def test_no_commit_after_finish_and_no_double_finish(tmp_path: Path) -> None:
     layout, config = _setup(tmp_path)
     run = Run.start(layout, config, RunSpec("t", "1"))
     run.finish("succeeded")
-    with pytest.raises(LedgerError):
+    with pytest.raises(LedgerError, match="already finished"):
         run.commit_file(WriterRole.NORMALIZER, "silver/trades/a.parquet", b"x", FACTS)
-    with pytest.raises(LedgerError):
+    assert not (tmp_path / "silver/trades").exists()
+    with pytest.raises(LedgerError, match="already finished"):
         run.finish("succeeded")
+    with pytest.raises(LedgerError, match="already finished"):
+        run.add_counts(requests=1)
+    other = Run.start(layout, config, RunSpec("t", "1"))
     with pytest.raises(LedgerError, match="Final run status"):
-        Run.start(layout, config, RunSpec("t", "1")).finish("running")
+        other.finish("running")
+    other.finish("succeeded")
 
 
-def test_invalid_spec_has_no_side_effect(tmp_path: Path) -> None:
+def test_invalid_finish_arguments_keep_run_open(tmp_path: Path) -> None:
     layout, config = _setup(tmp_path)
-    with pytest.raises(LedgerError, match="JSON"):
-        Run.start(layout, config, RunSpec("t", "1", parameters={"bad": float("inf")}))
-    for bad in ("Bad ID", "-lead", "caf\u00e9"):
-        with pytest.raises(LedgerError, match="run_id"):
-            Run.start(layout, config, RunSpec("t", "1"), run_id=bad)
-    with pytest.raises(LedgerError, match="write_report"):
-        Run.start(layout, config, RunSpec("t", "1"), write_report="no")
+    run = Run.start(layout, config, RunSpec("t", "1"))
+    with pytest.raises(LedgerError, match="error description"):
+        run.finish("failed")
+    with pytest.raises(LedgerError, match="error must be a string"):
+        run.finish("failed", error=123)
+    with pytest.raises(LedgerError, match="only allowed"):
+        run.finish("succeeded", error="x")
+    run.finish("failed", error="real reason")
     with Ledger.open_read_only(tmp_path) as ledger:
-        assert ledger.runs() == []
+        assert ledger.get_run(run.run_id)["error"] == "real reason"
+
+
+def test_unrecordable_exit_is_logged_and_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    layout, config = _setup(tmp_path)
+    run = Run.start(layout, config, RunSpec("t", "1"))
+
+    def busy(*args: object, **kwargs: object) -> None:
+        raise LedgerError("database is locked")
+
+    monkeypatch.setattr(run._ledger, "finish_run", busy)
+    with pytest.raises(LedgerError, match="could not be recorded"), run:
+        pass
+    assert any(getattr(r, "event", None) == "run.finish_failed" for r in caplog.records)
+    with pytest.raises(RuntimeError, match="original"), Run.start(layout, config, RunSpec("t", "1")) as second:
+        monkeypatch.setattr(second._ledger, "finish_run", busy)
+        raise RuntimeError("original")
+
+
+def test_invalid_start_has_no_side_effect(tmp_path: Path) -> None:
+    layout, config = _setup(tmp_path)
+    attempts = [
+        ({"spec": RunSpec("t", "1", parameters={"bad": float("inf")})}, "JSON"),
+        ({"spec": RunSpec("", "1")}, "task"),
+        ({"spec": RunSpec("t", "1"), "write_report": "no"}, "write_report"),
+        ({"spec": RunSpec("t", "1"), "run_id": ""}, "run_id"),
+    ]
+    attempts += [({"spec": RunSpec("t", "1"), "run_id": bad}, "run_id") for bad in ("Bad ID", "-lead", "caf\u00e9")]
+    for kwargs, message in attempts:
+        with pytest.raises(LedgerError, match=message):
+            Run.start(layout, config, **kwargs)
+    other_root = tmp_path / "other"
+    other_root.mkdir()
+    other = PipelineConfig.load(environ={"DATA_ROOT": str(other_root)})
+    with pytest.raises(LedgerError, match="does not match the layout root"):
+        Run.start(layout, other, RunSpec("t", "1"))
+    waiting = PipelineConfig.load(environ={"DATA_ROOT": str(tmp_path), "PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS": "5"})
+    with pytest.raises(LedgerError, match="lock timeout"):
+        Run.start(layout, waiting, RunSpec("t", "1"))
+    assert not (tmp_path / "manifests/ledger.sqlite3").exists()
     assert not (tmp_path / "manifests/runs").exists()
 
 
-def test_registration_failure_leaves_file_unregistered(tmp_path: Path) -> None:
+def test_invalid_commit_is_rejected_before_publishing(tmp_path: Path) -> None:
     layout, config = _setup(tmp_path)
     run = Run.start(layout, config, RunSpec("t", "1"))
     with pytest.raises(LedgerError, match="Unknown dataset"):
         run.commit_file(WriterRole.NORMALIZER, "silver/trades/a", b"x", FileFacts("silver.nope", 1, "checked"))
-    assert (tmp_path / "silver/trades/a").read_bytes() == b"x"
-    with pytest.raises(WriteBoundaryError):
+    with pytest.raises(LedgerError, match="under silver/"):
         run.commit_file(WriterRole.NORMALIZER, "gold/x", b"x", FACTS)
+    assert not (tmp_path / "silver/trades").exists() and list((tmp_path / "gold").iterdir()) == []
     run.finish("failed", error="registration failed")
+
+
+def test_registration_failure_after_publication_leaves_file_unregistered(tmp_path: Path) -> None:
+    layout, config = _setup(tmp_path)
+    run = Run.start(layout, config, RunSpec("t", "1"))
+    with pytest.raises(LedgerError, match="expected 3"):
+        run.commit_file(WriterRole.NORMALIZER, "silver/trades/a", b"x", FACTS, CheckpointAdvance("k", 1, 3))
+    assert (tmp_path / "silver/trades/a").read_bytes() == b"x"
+    run.finish("failed", error="stale checkpoint")
 
 
 def test_record_publication_failure_is_reported(tmp_path: Path) -> None:

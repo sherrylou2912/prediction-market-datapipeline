@@ -38,7 +38,9 @@ from src.data_io.ledger import (
     FileFacts,
     Ledger,
     LedgerError,
+    commit_values,
     json_text,
+    run_values,
 )
 from src.data_schema.contracts import SCHEMA_VERSION
 
@@ -90,6 +92,8 @@ class Run:
         self.run_id = run_id
         self._ledger = ledger
         self._write_report = write_report
+        # "running" until the final status is stored, then "closed".
+        self._state = "running"
         self.record_path: Path | None = None
 
     @classmethod
@@ -102,31 +106,39 @@ class Run:
         write_report: bool = True,
         run_id: str | None = None,
     ) -> Run:
+        """Validate everything, then register the run; nothing is created when validation fails."""
         if not isinstance(spec, RunSpec):
             raise LedgerError("spec must be a RunSpec value")
         if not isinstance(write_report, bool):
             raise LedgerError("write_report must be a boolean")
         if not isinstance(spec.parameters, Mapping):
             raise LedgerError("parameters must be a mapping")
-        identifier = run_id or new_run_id()
+        identifier = new_run_id() if run_id is None else run_id
         if not isinstance(identifier, str) or re.fullmatch(r"[a-z0-9][a-z0-9_-]*", identifier) is None:
             raise LedgerError("run_id must use lowercase ASCII letters, digits, _ or -")
+        configured_root = config.data_root.resolve() if config.data_root.exists() else config.data_root
+        if configured_root != layout.root:
+            raise LedgerError(f"Config DATA_ROOT {config.data_root} does not match the layout root {layout.root}")
+        if config.writer_lock_timeout_seconds != layout.lock_timeout_seconds:
+            raise LedgerError("Config writer_lock_timeout_seconds does not match the layout's lock timeout")
         settings = config.effective_settings()
+        fields = {
+            "run_id": identifier,
+            "task": spec.task,
+            "task_version": spec.task_version,
+            "started_at": datetime.now(timezone.utc),
+            "code_version": code_version(),
+            "config": settings,
+            "parameters": dict(spec.parameters),
+            "venue": spec.venue,
+            "dataset": spec.dataset,
+            "range_start": spec.range_start,
+            "range_end": spec.range_end,
+        }
+        run_values(**fields)  # reject invalid input before the ledger file is created
         ledger = Ledger.open(layout)
         try:
-            ledger.create_run(
-                run_id=identifier,
-                task=spec.task,
-                task_version=spec.task_version,
-                started_at=datetime.now(timezone.utc),
-                code_version=code_version(),
-                config=settings,
-                parameters=dict(spec.parameters),
-                venue=spec.venue,
-                dataset=spec.dataset,
-                range_start=spec.range_start,
-                range_end=spec.range_end,
-            )
+            ledger.create_run(**fields)
         except BaseException:
             ledger.close()
             raise
@@ -135,6 +147,10 @@ class Run:
             extra={"event": "run.started", "run_id": identifier, "details": {"task": spec.task, "config": settings}},
         )
         return cls(layout, ledger, identifier, write_report=write_report)
+
+    def _require_running(self) -> None:
+        if self._state != "running":
+            raise LedgerError(f"Run {self.run_id} is already finished")
 
     def commit_file(
         self,
@@ -148,16 +164,21 @@ class Run:
     ) -> dict[str, Any]:
         """Publish ``payload`` durably, then register it and advance ``checkpoint`` in one transaction.
 
-        If registration fails after publication, the file stays on disk
-        unregistered; ``python -m src audit`` reports it.
+        Arguments and the run state are checked before publishing. If
+        registration still fails afterwards (for example a stale checkpoint
+        version), the file stays on disk unregistered and
+        ``python -m src audit`` reports it.
         """
+        self._require_running()
+        commit_values(path, facts, checkpoint)
+        self._ledger.require_running(self.run_id)
         published = self.layout.writer(role).write_new(path, payload, receipt_id=receipt_id)
         relative = published.relative_to(self.layout.root)
         try:
             entry = self._ledger.commit(self.run_id, relative, facts, checkpoint)
         except LedgerError:
             logger.error(
-                "published file was not registered: %s",
+                "file was published but registration failed: %s",
                 relative,
                 extra={"event": "run.file_unregistered", "run_id": self.run_id},
             )
@@ -170,16 +191,27 @@ class Run:
         return entry
 
     def add_counts(self, *, requests: int = 0, rows_received: int = 0, rows_quarantined: int = 0) -> None:
+        self._require_running()
         self._ledger.add_counts(
             self.run_id, requests=requests, rows_received=rows_received, rows_quarantined=rows_quarantined
         )
 
     def finish(self, status: str, error: str | None = None) -> Path:
-        """Store the final status, then publish the run record; returns the record path."""
+        """Store the final status, then publish the run record; returns the record path.
+
+        If storing the status fails, the run stays open so the caller (or
+        ``__exit__``) can retry or record a failure.
+        """
+        self._require_running()
         if status not in FINAL_RUN_STATUSES:
             raise LedgerError(f"Final run status must be one of {FINAL_RUN_STATUSES}")
+        if error is not None and (not isinstance(error, str) or status == "succeeded"):
+            raise LedgerError("error must be a string and is only allowed for partial or failed runs")
+        if status == "failed" and not (error and error.strip()):
+            raise LedgerError("A failed run requires an error description")
+        self._ledger.finish_run(self.run_id, status=status, finished_at=datetime.now(timezone.utc), error=error)
+        self._state = "closed"
         try:
-            self._ledger.finish_run(self.run_id, status=status, finished_at=datetime.now(timezone.utc), error=error)
             record = build_record(self._ledger, self.run_id)
             writer = self.layout.writer(WriterRole.REGISTRY)
             base = f"manifests/runs/{self.run_id}"
@@ -208,22 +240,24 @@ class Run:
     def __exit__(
         self, exc_type: type[BaseException] | None, exc: BaseException | None, traceback: TracebackType | None
     ) -> None:
-        if self.record_path is not None:
-            return
-        try:
-            still_running = self._ledger.get_run(self.run_id)["status"] == "running"
-        except LedgerError:
-            # The ledger is closed: finish() already ran and raised its own error.
-            return
-        if not still_running:
+        if self._state != "running":
             return
         reason = "run exited without calling finish()" if exc is None else f"{type(exc).__name__}: {exc}"
         try:
             self.finish("failed", error=reason)
-        except LedgerError:
-            logger.exception("cannot record failed run", extra={"event": "run.finish_failed", "run_id": self.run_id})
+        except LedgerError as finish_exc:
+            logger.exception(
+                "cannot record failed run; it remains marked running in the ledger",
+                extra={"event": "run.finish_failed", "run_id": self.run_id},
+            )
+            if self._state == "running":
+                self._state = "closed"
+                self._ledger.close()
             if exc is None:
-                raise
+                raise LedgerError(
+                    f"Run {self.run_id} exited without calling finish() and could not be recorded as failed"
+                ) from finish_exc
+            return
         if exc is None:
             raise LedgerError(f"Run {self.run_id} exited without calling finish(); recorded as failed")
 

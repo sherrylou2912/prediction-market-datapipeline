@@ -27,6 +27,7 @@
 | A7 | 运行结束先在账本中写最终状态，再由 REGISTRY writer 发布 `manifests/runs/<run_id>/record.json`（及默认的 `report.md`）。记录内容完全来自账本，可重新生成。 | 账本是权威；中断时 audit 能发现“已结束但缺记录”。 | — |
 | A8 | 新增只读 `audit` 命令：核对 manifest 文件是否存在、校验和是否一致，报告未登记文件、遗留 partial、未结束运行和缺失的运行记录；只报告，不修改。 | FOUNDATION_RULES §8“文件已写入但 checkpoint 未推进时须检查”；PROJECT §11 可排查性。 | 每次全量计算校验和，数据大时较慢。 |
 | A9 | `writer_lock_timeout_seconds` 除 `runtime.json` 外还有模型默认值 `0`；缺字段时来源记为 `default:model`，测试保证两处默认值一致。 | `0` 即 PR1 行为，普遍安全；自定义配置目录和直接构造不必修改。 | 两处默认值需保持一致（已有测试）。 |
+| A10 | SQLite busy timeout 取 `max(writer_lock_timeout_seconds, 5)` 秒；只读连接为普通连接加 `query_only`，存在回滚日志时拒绝打开。 | B2-R1-2、B4-R1-1：`mode=ro` 读者使并发写者报 disk I/O 错误；写锁默认 0 时一次读取就会让提交失败。 | 写者最多多等 5 秒。 |
 
 ## 4. 代码块与验收示例
 

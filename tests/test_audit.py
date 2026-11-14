@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -18,13 +19,17 @@ from src.data_io.runs import Run, RunSpec
 FACTS = FileFacts(dataset="silver.trades", row_count=1, validation="contract per row")
 
 
-def _snapshot(root: Path) -> dict[str, tuple[int, int]]:
+def _snapshot(root: Path) -> dict[str, tuple]:
+    """Every entry with size, mtime and, for regular files, the content hash."""
     result = {}
     for current, dirs, files in os.walk(root):
         for name in dirs + files:
             path = Path(current) / name
             info = path.lstat()
-            result[str(path.relative_to(root))] = (info.st_size, info.st_mtime_ns)
+            content = (
+                hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() and not path.is_symlink() else None
+            )
+            result[str(path.relative_to(root))] = (info.st_size, info.st_mtime_ns, content)
     return result
 
 
@@ -100,3 +105,70 @@ def _now():
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc)
+
+
+def test_cli_writes_nothing_and_reports_absent_ledger(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _clean_run(tmp_path)
+    (tmp_path / "silver/trades/a").write_bytes(b"changed")
+    before = _snapshot(tmp_path)
+    assert main(["audit"], environ={"DATA_ROOT": str(tmp_path)}) == 1
+    assert _snapshot(tmp_path) == before
+    capsys.readouterr()
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert main(["audit"], environ={"DATA_ROOT": str(empty)}) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["ledger"] == "absent" and list(empty.iterdir()) == []
+
+
+def test_rollback_journal_is_refused_without_writing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _clean_run(tmp_path)
+    (tmp_path / "manifests/ledger.sqlite3-journal").write_bytes(b"\xd9\xd5\x05\xf9\x20\xa1\x63\xd7" + b"\0" * 504)
+    before = _snapshot(tmp_path)
+    assert main(["audit"], environ={"DATA_ROOT": str(tmp_path)}) == 2
+    assert "rollback journal" in capsys.readouterr().err
+    assert _snapshot(tmp_path) == before
+
+
+def test_symlinks_are_reported_not_followed(tmp_path: Path) -> None:
+    layout, _ = _clean_run(tmp_path)
+    outside = tmp_path / "outside"
+    (outside / "trades").mkdir(parents=True)
+    (outside / "trades/a").write_bytes(b"a")
+    (outside / "x").write_bytes(b"x")
+    gold = tmp_path / "gold"
+    gold.rmdir()
+    gold.symlink_to(outside)
+    silver_trades = tmp_path / "silver/trades"
+    silver_trades.rename(tmp_path / "silver/real-trades")
+    silver_trades.symlink_to(outside / "trades")
+    report = audit(tmp_path)
+    assert {"kind": "unexpected_symlink", "path": "gold"} in report["issues"]
+    assert {"kind": "manifest_file_not_regular", "path": "silver/trades/a"} in report["issues"]
+    assert not any(issue.get("path", "").startswith("gold/") for issue in report["issues"])
+
+
+def test_recovery_partials_and_unreadable_files_are_reported(tmp_path: Path) -> None:
+    _clean_run(tmp_path)
+    recovery = tmp_path / "recovery/conflicts/silver"
+    recovery.mkdir(parents=True)
+    (recovery / "paired.bin").write_bytes(b"b")
+    (recovery / "paired.json").write_text("{}")
+    (recovery / "orphan.json").write_text("{}")
+    (recovery / "notes.txt").write_text("?")
+    (tmp_path / "manifests/.partial-x").write_bytes(b"p")
+    registered = tmp_path / "silver/trades/a"
+    registered.chmod(0)
+    try:
+        if os.access(registered, os.R_OK):
+            pytest.skip("running with privileges that ignore file permissions")
+        report = audit(tmp_path)
+    finally:
+        registered.chmod(0o644)
+    assert _kinds(report) == [
+        "manifest_file_unreadable",
+        "partial_file",
+        "recovery_metadata_without_payload",
+        "recovery_pending",
+        "recovery_unexpected_file",
+    ]

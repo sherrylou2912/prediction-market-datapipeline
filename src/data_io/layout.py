@@ -398,7 +398,11 @@ class ScopedWriter:
             raise WriteBoundaryError("Target name is reserved for incomplete writes")
         if relative.parts[0] != self.role.value:
             raise WriteBoundaryError(f"{self.role.name} writer may only write under {self.role.value}/: {path}")
-        if len(relative.parts) == 2 and relative.parts[0] == "manifests" and relative.name.startswith("ledger.sqlite3"):
+        if (
+            len(relative.parts) == 2
+            and relative.parts[0] == "manifests"
+            and relative.name.casefold().startswith("ledger.sqlite3")
+        ):
             raise WriteBoundaryError(f"Target name is reserved for the ledger: {path}")
         if self.role == WriterRole.COLLECTOR:
             if (

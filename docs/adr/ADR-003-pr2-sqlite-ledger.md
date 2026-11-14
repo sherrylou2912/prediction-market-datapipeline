@@ -14,7 +14,9 @@
 - 账本文件不能是软链接，必须与 `DATA_ROOT` 在同一设备；REGISTRY writer 不能写 `manifests/ledger.sqlite3*`。
 - manifest 登记时由账本重新计算磁盘文件的 SHA-256 和大小，schema 版本取自契约 registry；只登记 bronze、silver、gold 中与数据集同层的文件（imports 与 quarantine 的登记留给 PR3、PR4）。
 - checkpoint 只能在登记 manifest 的同一事务中推进，调用方须说明已执行的验证，并给出期望的当前版本（新 checkpoint 为 0）；版本不符时整个事务回滚，manifest 也不登记。每次推进另存历史。
-- 账本事务等待锁的时间使用 `writer_lock_timeout_seconds`。
+- 账本事务等待 SQLite 锁的时间为 `max(writer_lock_timeout_seconds, 5)` 秒：SQLite 的读写都会短暂持锁，即使写锁设置为立即失败，也不能让一次并发读取导致提交失败（agent 决定）。
+- 只读连接使用普通连接加 `query_only`，不用 `mode=ro`：`mode=ro` 读者会让并发写者报误导性的 disk I/O 错误。普通连接打开时 SQLite 会回滚遗留日志，因此存在 `ledger.sqlite3-journal` 时只读命令拒绝打开（agent 决定）。
+- 登记路径必须与磁盘上的文件名逐级完全一致，避免大小写不敏感文件系统上同一文件以不同大小写登记两次；watermark 不能后退或被去掉。
 
 **理由与后果**：SQLite 提供单机事务，测试和 CI 无需外部服务，符合“简单优先”和“无必要不加依赖”。代价是只适合单机；多机写入、远程查询和更大规模时需迁移到 PostgreSQL，届时写新 ADR。实际断电下的持久性尚未实测。
 
