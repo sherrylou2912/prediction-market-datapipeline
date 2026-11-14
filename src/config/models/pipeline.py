@@ -149,7 +149,11 @@ class PipelineConfig(ConfigModel):
             raise ConfigError("DATA_MIN_FREE_GIB is too large to parse.") from exc
         raw_level = values.get("PIPELINE_LOG_LEVEL", "").strip()
         raw_timeout = values.get("PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS", "").strip()
-        if raw_timeout and (not raw_timeout.isascii() or not raw_timeout.isdecimal()):
+        # Leading zeros are allowed; more than four significant digits is out of range
+        # and is rejected before int() (Python 3.11+ limits int() on very long strings).
+        if raw_timeout and (
+            not raw_timeout.isascii() or not raw_timeout.isdecimal() or len(raw_timeout.lstrip("0")) > 4
+        ):
             raise ConfigError("PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS must be an integer from 0 to 3600.")
         config = cls(
             data_root=Path(raw_root).expanduser(),

@@ -523,7 +523,7 @@ def test_write_waits_for_lock_then_fails_or_succeeds(tmp_path: Path) -> None:
         handle.close()
 
 
-@pytest.mark.parametrize("value", ["-1", "3601", "abc", "1.5", "\uff11"])
+@pytest.mark.parametrize("value", ["-1", "3601", "abc", "1.5", "\uff11", "9" * 5000])
 def test_invalid_lock_timeout_environment_rejected(tmp_path: Path, value: str) -> None:
     with pytest.raises(ConfigError, match="PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS"):
         PipelineConfig.load(environ={"DATA_ROOT": str(tmp_path), "PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS": value})

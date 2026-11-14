@@ -42,3 +42,37 @@
 Analyst 检查：`uv run ruff check .` → All checks passed；`uv run ruff format --check .` → 通过；`uv run pytest tests/ -q` → 393 passed（含尚未提交的 B2 `tests/test_ledger.py` 20 个用例；B1 提交不含 B2 文件）。
 
 - Round result: `changes requested`
+
+## Block B1 · Round 2 · 2026-11-13
+
+- Revision: `codex/pr2-run-ledger` @ `52bd831`（相对第 1 轮：`git diff 24501f2..52bd831`）；files: `docs/pr2/PLAN.md`、`docs/pr2/REVIEW_LOG.md`、`src/config/README.md`、`src/config/models/pipeline.py`、`src/config/validation.py`、`src/data_io/layout.py`、`tests/test_pipeline_foundation.py`、`tests/test_writer_recovery.py`。主工作区未提交的 `src/data_io/ledger.py`、`src/data_io/runs.py`、`tests/test_ledger.py`、`tests/test_runs.py` 属于 B2/B3，不在本轮审查范围；`layout.py` 中 `manifests/ledger.sqlite3*` 保留名检查属于 B2，仅确认未影响 B1。
+- 审查方式：在 `/private/tmp/b1-review-wt2` 以 `git worktree add --detach 52bd831` 检出运行，结束后已移除。
+- Checks run by Reviewer（均在上述 worktree 内，Python 3.9.6）：
+  - `uv run ruff check .` → All checks passed!
+  - `uv run ruff format --check .` → 24 files already formatted
+  - `uv run pytest tests/ -q` → 373 passed in 5.14s（Analyst 报告的 393 含主工作区未提交的 B2/B3 测试，与本提交单独的 373 不矛盾）
+  - `uv run pytest tests/ -q -k "lock or invalid_fields or json_default"` → 36 passed, 337 deselected
+  - 探测（Python 3.13.2，独立临时 venv，结束后删除）：`PipelineConfig.load(environ={..., "PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS": "9"*5000})` 与 `"0"*5000+"5"` 均抛出原生 `ValueError: Exceeds the limit (4300 digits) for integer string conversion`，而同样输入给 `DATA_MIN_FREE_GIB` 时得到 `ConfigError: DATA_MIN_FREE_GIB is too large to parse.`
+
+### Previous findings
+| ID | Status | Evidence |
+| --- | --- | --- |
+| B1-R1-1 | resolved | `tests/test_pipeline_foundation.py:50-54` 直接构造拒绝 `-1/3601/True/1.5/"1"`；`tests/test_writer_recovery.py` 新增 `test_invalid_lock_timeout_rejected_for_layout_and_writer`、`test_create_waits_for_lock_then_fails_without_change`（partial 保留、`recovery/` 无新增）、`test_write_waits_for_lock_then_fails_or_succeeds`（超时后 `silver/` 为空）、`test_lock_timeout_sources`（覆盖值、来源、`runtime.json` 合法与非法值），均通过。 |
+| B1-R1-2 | resolved | `src/config/models/pipeline.py:170-174` 依 `runtime.model_fields_set` 区分 `default:runtime.json`/`default:model`；`test_lock_timeout_sources` 断言；`src/config/README.md` 已同步。 |
+| B1-R1-3 | resolved | PLAN §3 新增 A9；`test_json_default_matches_model_default` 断言两处默认值一致。（A9 行排在 A8 之前，仅排版问题，不另立发现。） |
+| B1-R1-4 | resolved | `MAX_LOCK_TIMEOUT_SECONDS` 唯一定义于 `src/config/validation.py`，`src/data_io/layout.py:91-93` 在 `_lock` 内引用并校验，覆盖直接构造的 `DataLayout`/`ScopedWriter`；`src.config` 不导入 `src.data_io`，无循环导入。 |
+| B1-R1-5 | resolved，但引入新问题 | 长度判断已删除，`" 0030 "` 被接受为 30；但删除后超长数字串在 Python ≥3.11 上触发未转换的 `ValueError`，见 B1-R2-1。 |
+| B1-R1-6 | resolved | 两个超时用例断言 `0.9 <= 耗时 < 3`，Timer 线程 `join()`，句柄在 `finally` 中关闭。 |
+| B1-R1-7 | deferred（out-of-scope，转 B4） | Analyst 已确认在 B4 的 CHANGELOG 与 ADR-003 中记录；不阻塞 B1。 |
+
+### New findings
+| ID | Severity | Location | Finding | Suggested direction |
+| --- | --- | --- | --- | --- |
+| B1-R2-1 | should-fix | `src/config/models/pipeline.py:151-160`（`int(raw_timeout)`） | 修复 B1-R1-5 时删除了长度判断，`int(raw_timeout)` 不再有保护。项目支持 Python ≥3.9，在 Python ≥3.11 上，超过 4300 位的纯数字环境变量会抛出原生 `ValueError`，而不是带变量名的 `ConfigError`；与 `DATA_MIN_FREE_GIB` 已有的 `try/except ValueError` 处理不一致，违反“非法设置立即以清晰错误拒绝”（硬规则 10）。当前 3.9 测试环境无法发现，已在 3.13.2 上复现。 | 仿照 `DATA_MIN_FREE_GIB` 用 `try/except ValueError` 转为 `ConfigError("PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS must be an integer from 0 to 3600.")`；或先去掉前导零再按长度（>4 位）直接拒绝，这样既接受 `"0003600"`，又不依赖解释器版本。补一个超长输入（如 `"9"*5000`）的测试，断言得到 `ConfigError`。 |
+
+### Analyst response
+| ID | Action (fixed / disputed / deferred-to-owner) | Detail and checks |
+| --- | --- | --- |
+| B1-R2-1 | fixed | `src/config/models/pipeline.py`：去掉前导零后有效数字超过 4 位即报 `ConfigError`，不再调用 `int()`；`test_invalid_lock_timeout_environment_rejected` 增加 `"9" * 5000` 用例。前导零值（`" 0030 "`）仍接受。 |
+
+- Round result: `changes requested`
