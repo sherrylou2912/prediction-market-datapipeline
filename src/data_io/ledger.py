@@ -302,7 +302,9 @@ class Ledger:
         a ``mode=ro`` reader makes a concurrent writer fail with a misleading
         disk I/O error instead of waiting. Like any SQLite reader, it rolls back
         the journal of an interrupted, uncommitted transaction (SQLite's own
-        crash recovery), so opening is refused while a journal file exists.
+        crash recovery), so opening is refused while a journal file exists. A
+        writer that crashes between that check and the first read can still be
+        rolled back by this reader; run read-only commands while no writer is active.
         """
         path = root / LEDGER_RELATIVE_PATH
         if not cls._check_file(root, path, required=False):
@@ -316,7 +318,23 @@ class Ledger:
                 "lets SQLite roll back the interrupted transaction."
             )
         try:
-            connection = sqlite3.connect(str(path), timeout=MIN_BUSY_TIMEOUT_SECONDS, isolation_level=None)
+            with path.open("rb") as handle:
+                header = handle.read(20)
+        except OSError as exc:
+            raise LedgerError(f"Cannot read ledger header {path}: {exc}") from exc
+        wal_files = [path.with_name(path.name + suffix) for suffix in ("-wal", "-shm")]
+        # Bytes 18-19 are 2 in WAL mode; a WAL reader creates -wal/-shm files.
+        if header[18:20] == b"\x02\x02" or any(item.exists() or item.is_symlink() for item in wal_files):
+            raise LedgerError(
+                f"Ledger {path} is in WAL mode or has WAL files; the ledger must use journal_mode=DELETE. "
+                "A write task reopens it in DELETE mode."
+            )
+        try:
+            # mode=rw never creates a missing file (unlike a plain path) and,
+            # unlike mode=ro, lets concurrent writers wait normally.
+            connection = sqlite3.connect(
+                f"{path.as_uri()}?mode=rw", uri=True, timeout=MIN_BUSY_TIMEOUT_SECONDS, isolation_level=None
+            )
             connection.execute("PRAGMA query_only = ON")
             version = connection.execute("PRAGMA user_version").fetchone()[0]
         except sqlite3.Error as exc:
@@ -328,6 +346,8 @@ class Ledger:
 
     @staticmethod
     def _check_file(root: Path, path: Path, *, required: bool) -> bool:
+        if path.parent.is_symlink():
+            raise LedgerError(f"Ledger directory must not be a symbolic link: {path.parent}")
         if path.is_symlink():
             raise LedgerError(f"Ledger must not be a symbolic link: {path}")
         if not path.exists():
@@ -403,7 +423,10 @@ class Ledger:
             connection.execute("COMMIT")
         except sqlite3.Error as exc:
             if connection.in_transaction:
-                connection.execute("ROLLBACK")
+                try:
+                    connection.execute("ROLLBACK")
+                except sqlite3.Error as rollback_exc:
+                    raise LedgerError(f"Ledger commit failed ({exc}) and rollback also failed: {rollback_exc}") from exc
             raise LedgerError(f"Ledger commit failed and was rolled back: {exc}") from exc
 
     # Runs -----------------------------------------------------------------

@@ -114,7 +114,7 @@ def test_unrecordable_exit_is_logged_and_raised(
         raise LedgerError("database is locked")
 
     monkeypatch.setattr(run._ledger, "finish_run", busy)
-    with pytest.raises(LedgerError, match="could not be recorded"), run:
+    with pytest.raises(LedgerError, match="could not be recorded as failed; it remains marked running"), run:
         pass
     assert any(getattr(r, "event", None) == "run.finish_failed" for r in caplog.records)
     with pytest.raises(RuntimeError, match="original"), Run.start(layout, config, RunSpec("t", "1")) as second:
@@ -187,3 +187,14 @@ def test_run_id_and_code_version(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(runs_module.subprocess, "run", missing_git)
     assert code_version() == {"commit": None, "dirty": None, "unknown_reason": "git unavailable: FileNotFoundError"}
+
+
+def test_exit_with_unpublishable_record_reports_failed_status(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    layout, config = _setup(tmp_path)
+    run = Run.start(layout, config, RunSpec("t", "1"))
+    layout.writer(WriterRole.REGISTRY).write_new(f"manifests/runs/{run.run_id}/record.json", b"occupied")
+    with pytest.raises(LedgerError, match="was recorded as failed, but its run record was not published"), run:
+        pass
+    assert any("recorded as failed" in record.getMessage() for record in caplog.records)
+    with Ledger.open_read_only(tmp_path) as ledger:
+        assert ledger.get_run(run.run_id)["status"] == "failed"

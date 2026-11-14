@@ -246,17 +246,18 @@ class Run:
         try:
             self.finish("failed", error=reason)
         except LedgerError as finish_exc:
-            logger.exception(
-                "cannot record failed run; it remains marked running in the ledger",
-                extra={"event": "run.finish_failed", "run_id": self.run_id},
-            )
             if self._state == "running":
+                # The final status itself was not stored.
+                message = "could not be recorded as failed; it remains marked running in the ledger"
                 self._state = "closed"
                 self._ledger.close()
+            else:
+                message = "was recorded as failed, but its run record was not published"
+            logger.exception(
+                "run %s %s", self.run_id, message, extra={"event": "run.finish_failed", "run_id": self.run_id}
+            )
             if exc is None:
-                raise LedgerError(
-                    f"Run {self.run_id} exited without calling finish() and could not be recorded as failed"
-                ) from finish_exc
+                raise LedgerError(f"Run {self.run_id} exited without calling finish() and {message}") from finish_exc
             return
         if exc is None:
             raise LedgerError(f"Run {self.run_id} exited without calling finish(); recorded as failed")

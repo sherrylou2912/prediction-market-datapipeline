@@ -172,3 +172,51 @@ def test_recovery_partials_and_unreadable_files_are_reported(tmp_path: Path) -> 
         "recovery_pending",
         "recovery_unexpected_file",
     ]
+
+
+def test_wal_mode_ledger_is_refused_without_writing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    import sqlite3
+
+    _clean_run(tmp_path)
+    connection = sqlite3.connect(tmp_path / "manifests/ledger.sqlite3")
+    connection.execute("PRAGMA journal_mode = WAL")
+    connection.close()
+    for name in ("ledger.sqlite3-wal", "ledger.sqlite3-shm"):
+        (tmp_path / "manifests" / name).unlink(missing_ok=True)
+    before = _snapshot(tmp_path)
+    assert main(["audit"], environ={"DATA_ROOT": str(tmp_path)}) == 2
+    assert "WAL" in capsys.readouterr().err
+    assert _snapshot(tmp_path) == before
+
+
+def test_read_only_open_never_creates_a_missing_ledger(tmp_path: Path) -> None:
+    import sqlite3
+
+    from src.data_io.ledger import LedgerError
+
+    (tmp_path / "manifests").mkdir()
+    ledger = tmp_path / "manifests/ledger.sqlite3"
+    with pytest.raises(sqlite3.OperationalError):
+        sqlite3.connect(f"{ledger.as_uri()}?mode=rw", uri=True)
+    assert not ledger.exists()
+    manifests = tmp_path / "elsewhere"
+    (tmp_path / "manifests").rename(manifests)
+    (tmp_path / "manifests").symlink_to(manifests)
+    with pytest.raises(LedgerError, match="directory must not be a symbolic link"):
+        Ledger.open_read_only(tmp_path)
+
+
+def test_unreadable_directory_is_reported_and_audit_continues(tmp_path: Path) -> None:
+    _clean_run(tmp_path)
+    blocked = tmp_path / "bronze/blocked"
+    blocked.mkdir()
+    (tmp_path / "gold/orphan").write_bytes(b"o")
+    blocked.chmod(0)
+    try:
+        if os.access(blocked, os.R_OK):
+            pytest.skip("running with privileges that ignore directory permissions")
+        report = audit(tmp_path)
+    finally:
+        blocked.chmod(0o755)
+    assert _kinds(report) == ["scan_error", "unregistered_file"]
+    assert report["issues"][0]["path"] == "bronze/blocked"

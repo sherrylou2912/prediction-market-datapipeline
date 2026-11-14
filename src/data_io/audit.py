@@ -1,7 +1,9 @@
 """Read-only reconciliation of data files against the ledger.
 
-The audit never creates, changes, or deletes anything; it refuses to open a
-ledger that has a rollback journal, because SQLite would roll it back. It reports every
+The audit does not create, change, or delete files: it refuses to open a ledger
+that has a rollback journal or WAL files, because SQLite would roll back or
+create them. Run it while no writer is active (a writer crashing during the
+audit is the remaining narrow exception). It reports every
 condition that needs a person or a recovery step to look at it:
 
 * a registered file that is missing, not a regular file, or whose checksum or
@@ -30,11 +32,19 @@ AUDITED_LAYERS = ("bronze", "silver", "gold")
 NOT_AUDITED_LAYERS = ("imports", "quarantine")
 
 
-def _walk(directory: Path) -> list[tuple[Path, bool]]:
-    """Return (path, is_symlink) for every file or link below ``directory``."""
+def _walk(directory: Path, issues: list[dict[str, Any]], root: Path) -> list[tuple[Path, bool]]:
+    """Return (path, is_symlink) for every file or link below ``directory``.
+
+    A directory that cannot be listed is reported and skipped; the walk continues.
+    """
 
     def fail(error: OSError) -> None:
-        raise error
+        location = Path(error.filename) if error.filename else directory
+        try:
+            location = location.relative_to(root)
+        except ValueError:
+            pass
+        issues.append({"kind": "scan_error", "path": str(location), "error": error.strerror or str(error)})
 
     found = []
     if not directory.exists():
@@ -105,7 +115,7 @@ def audit(root: Path) -> dict[str, Any]:
             # Never follow a layer outside DATA_ROOT.
             issues.append({"kind": "unexpected_symlink", "path": layer})
             continue
-        for path, is_link in _walk(directory):
+        for path, is_link in _walk(directory, issues, root):
             relative = str(path.relative_to(root))
             if is_link:
                 issues.append({"kind": "unexpected_symlink", "path": relative})

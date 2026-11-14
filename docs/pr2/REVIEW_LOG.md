@@ -230,3 +230,118 @@ Analyst 检查：`uv run ruff check .` → All checks passed；`uv run ruff form
 - Round result: `changes requested`
 
 Analyst 检查（B2/B3/B4 修复后，主工作区）：`uv run ruff check .` → All checks passed；`uv run ruff format --check .` → 30 files already formatted；`uv run pytest tests/ -q` → 420 passed。
+
+## Block B4 · Round 2 · 2026-11-13
+
+- Revision: `codex/pr2-run-ledger` @ `1167712`；本块相关文件：`src/data_io/audit.py`、`src/data_io/ledger.py`（`open_read_only`、`snapshot`、`MIN_BUSY_TIMEOUT_SECONDS`）、`tests/test_audit.py`、`README.md`、`src/config/README.md`、`docs/adr/ADR-002-pr1-foundation.md`、`docs/adr/ADR-003-pr2-sqlite-ledger.md`。`src/cli.py` 在 `b8d1c69..1167712` 中没有改动。同一提交中 B2/B3 的其他改动只作背景。
+- 审查方式：在 `/private/tmp/pr2-b4-review-r2` 以 `git worktree add --detach 1167712` 检出，结束后已移除。探测数据只放在本会话 scratchpad 的专用目录中，结束后按确切路径删除。
+- Checks run by Reviewer（均在上述 worktree 内）：
+  - `uv run ruff check .` → All checks passed!
+  - `uv run ruff format --check .` → 30 files already formatted
+  - `uv run pytest tests/ -q` → 420 passed in 6.65s
+  - `uv run pytest tests/test_audit.py -q` → 7 passed
+  - 临时探测脚本（scratchpad，未入库）。每项都对 `DATA_ROOT` 做含 SHA-256 的快照，在 `main(["audit"])` 前后比较：
+    1. 真实 hot journal（cache spill 后 `os._exit(9)`，头为 `d9d505f920a163d7`）→ 返回 2，提示 “rollback journal …”，快照无差异。
+    2. **WAL 模式账本**（外部执行 `PRAGMA journal_mode=wal` 后关闭，WAL 标志留在文件头中）→ 返回 0，但 audit 之后新出现 `manifests/ledger.sqlite3-shm`（32768 字节）和 `manifests/ledger.sqlite3-wal`（0 字节），`manifests/` 目录的 mtime 也变了（见 B4-R2-1）。
+    3. 写连接持有 `BEGIN IMMEDIATE` 且已有未提交的 UPDATE（此时还没有 journal 文件）→ audit 返回 0，耗时约 0s，读到的是提交前的状态。
+    4. 只读快照：audit 连接持有读事务 1 秒，其间另一线程执行 `Run.start` + `finish` → 写者等待约 1.12s 后成功。B2-R1-2 的修复在 audit 场景下有效。
+    5. 账本权限 0444、`manifests/` 权限 0555 → 返回 0，快照无差异。
+    6. `bronze/locked` 目录权限 000 → 整个 audit 返回 2（`Permission denied`），见 B4-R2-3。
+    7. `manifests/` 是指向同设备目录的软链接 → 返回 1，报告 `unexpected_symlink: manifests`，但 `ledger: present`：账本是经由该软链接读取的，见 B4-R2-3。
+    8. 0 字节的 `ledger.sqlite3-journal`（不是 hot journal）→ 返回 2。这是保守处理，可以接受。
+    9. 普通 `sqlite3.connect()` 打开不存在的路径并执行 `PRAGMA query_only`、`PRAGMA user_version` → 创建了 0 字节文件；`file:…?mode=rw` 则报 `unable to open database file`，不会创建（见 B4-R2-2）。
+
+### Previous findings
+| ID | Status | Evidence |
+| --- | --- | --- |
+| B4-R1-1 | resolved | `ledger.py` 的 `open_read_only` 在连接前检查 `-journal`（含软链接），报错说明原因和处理方法；探测 1 中真实 hot journal 返回 2 且快照无差异；`test_rollback_journal_is_refused_without_writing` 通过；README、`src/config/README.md`、ADR-003 已记录。 |
+| B4-R1-2 | resolved | `audit.py` 中层根（含 `manifests`、`recovery`）是软链接时，报 `unexpected_symlink` 且不遍历；`_has_symlinked_parent` 对已登记文件报 `manifest_file_not_regular`；`test_symlinks_are_reported_not_followed` 通过。账本本身仍会经由软链接读取，另见 B4-R2-3。 |
+| B4-R1-3 | resolved | `Ledger.snapshot()` 在一个 `BEGIN`…`COMMIT` 读事务中读取；README、`src/config/README.md` 和 `audit()` 的 docstring 都写明须在没有写任务时运行；探测 4 显示读事务不再让写者失败。 |
+| B4-R1-4 | resolved | `_snapshot` 加入了内容哈希；`test_cli_writes_nothing_and_reports_absent_ledger` 覆盖 CLI 不写入和 `ledger: absent`；软链接测试覆盖 `manifest_file_not_regular`。 |
+| B4-R1-5 | partially resolved（suggestion，不阻塞） | 不可读的已登记文件改报 `manifest_file_unreadable` 并继续（测试通过）；但不可读的目录仍使整个 audit 返回 2（探测 6），见 B4-R2-3。 |
+| B4-R1-6 | resolved | 新增 `recovery_metadata_without_payload`、`recovery_unexpected_file`，并报告 `manifests/` 下的 partial；记录检查不再跟随软链接。不检查 `report.md` 的理由（任务可关闭它）合理。 |
+| B4-R1-7 | resolved | ADR-002 头部增加了“后续：写锁等待已由 ADR-003 实现”。 |
+
+### New findings
+| ID | Severity | Location | Finding | Suggested direction |
+| --- | --- | --- | --- | --- |
+| B4-R2-1 | should-fix | `src/data_io/ledger.py`（`open_read_only`，普通连接 + `query_only`）；`src/data_io/audit.py:1-5` 的 docstring；README、`src/config/README.md` 中的“不写任何文件” | 改为普通读写连接后，“audit 永不写入”只在账本为 DELETE 模式时成立。账本如果被外部工具切到 WAL（这正是 B2-R1-4 的场景；写路径的 `_configure` 现在会拒绝，但 WAL 标志会持久保存在文件头中），audit 会创建 `ledger.sqlite3-shm` 和 `ledger.sqlite3-wal`，并在退出后留下（探测 2：返回 0，`manifests/` 多出两个文件，目录 mtime 改变）。以前的 `mode=ro` 不会这样。现在的 journal 检查只看 `-journal`，看不到这种情况。 | 打开前读取文件头第 18、19 字节（WAL 时为 2）；或者在 `-journal` 之外，`-wal`/`-shm` 存在时也拒绝；更稳妥的是先读文件头，非 DELETE（legacy）模式就以 `LedgerError` 拒绝并说明原因，然后才连接。加测试：WAL 账本 → 返回 2 且快照不变。 |
+| B4-R2-2 | suggestion | `src/data_io/ledger.py`（`open_read_only` 中 `_check_file` 之后的 `sqlite3.connect(str(path), …)`） | 先检查后打开存在两个竞态窗口。(a) 检查通过后，账本恰好被移走或删除，普通 `connect` 会新建一个 0 字节的 `ledger.sqlite3`（探测 9）。(b) 检查 `-journal` 之后，写者在打开前崩溃，留下 hot journal，普通连接的第一次读取就会回滚它。窗口都很窄，并且 (b) 的回滚正是 SQLite 的标准恢复，但 docstring 和文档写的是“never creates, changes, or deletes anything”这样的绝对表述。 | 用 `sqlite3.connect(f"{path.as_uri()}?mode=rw", uri=True, …)`：它不会创建文件，也不会引发 B2-R1-2 中 `mode=ro` 的问题。打开后、第一次读之前再检查一次 `-journal`。或者在文档中把 (b) 写成已知的残留窗口。 |
+| B4-R2-3 | suggestion | `src/data_io/audit.py:37`（`_walk` 的 `onerror=fail`）；`ledger.py` 的 `_check_file` 只检查最后一级路径 | (a) 遍历中只要有一个目录不可读，整个 audit 仍以 2 退出，其他问题都不输出（探测 6；B4-R1-5 的剩余部分）。(b) `manifests/` 本身是软链接时，audit 正确报告 `unexpected_symlink: manifests`，但账本仍经由该软链接读取（`ledger: present`），与 README 中“symbolic links (never followed)”的表述不完全一致；`_require_same_device` 只能挡住跨设备的情况。 | (a) 把目录扫描错误记为 `scan_error` 并继续。(b) `open_read_only` 发现 `manifests` 是软链接时拒绝或跳过账本；或在文档中注明“账本路径的父目录软链接只会被报告，不会被拒绝”。 |
+
+### Analyst response
+| ID | Action (fixed / disputed / deferred-to-owner) | Detail and checks |
+| --- | --- | --- |
+| B4-R2-1 | fixed | `Ledger.open_read_only` 连接前读取文件头第 18–19 字节，WAL 模式或存在 `-wal`/`-shm` 时拒绝；`test_wal_mode_ledger_is_refused_without_writing`（CLI 返回 2，文件内容哈希不变）。 |
+| B4-R2-2 | fixed（采纳） | 只读连接改用 `file:…?mode=rw`，不会创建缺失文件；`test_read_only_open_never_creates_a_missing_ledger`。docstring 与文档写明剩余的窄窗口（审计期间写者崩溃）及须在无写任务时运行。 |
+| B4-R2-3 | fixed（采纳） | 无法列出的目录报告 `scan_error` 并继续（`test_unreadable_directory_is_reported_and_audit_continues`）；`manifests/` 为软链接时拒绝打开账本（同上测试文件）。B4-R1-5 随之完整解决。 |
+
+- Round result: `changes requested`
+
+## Block B2 · Round 2 · 2026-11-13
+
+- Revision: `codex/pr2-run-ledger` @ `1167712`（`git diff ee1ddf6..1167712 -- src/data_io/ledger.py src/data_io/layout.py tests/test_ledger.py`）；files: `src/data_io/ledger.py`、`src/data_io/layout.py`、`tests/test_ledger.py`。B4 的改动（`audit.py`、`cli.py`、文档）不在本轮范围，只在与账本行为交叉处查看。
+- 审查方式：在 `/private/tmp/pr2-review-b2b3-r2` 以 `git worktree add --detach 1167712` 检出运行，结束后已移除；Python 3.9 的临时 venv `/private/tmp/pr2-review-b2b3-r2-venv39` 也已删除。
+- Checks run by Reviewer（worktree 内，默认解释器为 CPython 3.9.6）：
+  - `uv run ruff check .` → All checks passed!
+  - `uv run ruff format --check .` → 30 files already formatted
+  - `uv run pytest tests/ -q` → 420 passed in 6.64s
+  - `uv run pytest tests/test_ledger.py tests/test_runs.py -q -rs` → 37 passed（大小写测试在本机大小写不敏感的 APFS 上实际执行，没有被跳过）
+  - `UV_PROJECT_ENVIRONMENT=/private/tmp/pr2-review-b2b3-r2-venv39 uv run --python 3.9 pytest tests/ -q` → 420 passed
+  - 探测脚本（`PYTHONPATH=. uv run python <scratchpad>/probe_r2.py`）：通过 `Run.commit_file` 用大小写变体及 NFC/NFD 变体重复提交；只读打开时的 TOCTOU；`mode=rw` URI 连接的并发行为。
+
+### Previous findings
+| ID | Status | Evidence |
+| --- | --- | --- |
+| B2-R1-1 | resolved | `ledger.py:505-509` 逐级用 `os.listdir` 核对目录项名称。探测：通过 `Run.commit_file` 提交 `silver/trades/A.parquet` 被拒（`must match the file's exact name on disk`），manifest 只有 `a.parquet`；NFD 形式的 `café` 也被拒。`test_case_variant_path_cannot_register_the_same_file_twice` 在本机实际执行并通过。 |
+| B2-R1-2 | resolved | 只读打开改为普通连接加 `query_only`（`ledger.py:318-320`）；busy timeout 为 `max(lock_timeout, MIN_BUSY_TIMEOUT_SECONDS=5)`，已记入 PLAN A10。`test_concurrent_reader_does_not_fail_a_commit` 证明读者持有读事务时写者会等待而不是失败。另一处行为见 B2-R2-1。 |
+| B2-R1-3 | resolved | `ledger.py:389-401`：只在 `in_transaction` 时回滚，回滚失败时报出包含原因的 `LedgerError`；`test_rollback_after_sqlite_auto_rollback_keeps_original_error` 覆盖。`COMMIT` 失败分支中的 `ROLLBACK` 仍没有保护，见 B2-R2-3。 |
+| B2-R1-4 | resolved | `ledger.py:358-362` 读取返回值，不是 `delete` 时拒绝；有测试覆盖。 |
+| B2-R1-5 | resolved | 时间改在事务内取得（`:532`）；history 按 `checkpoint_key, version` 排序；watermark 后退或被去掉时拒绝且不登记（`:546-550`）。比较用的是 ISO 文本，所有值都由 `utc_text` 生成且固定为 `+00:00`，带微秒与不带微秒混合时字典序也正确（`+` < `.` < 数字），已核对。 |
+| B2-R1-6 | resolved | `layout.py:404` 改用 `casefold()`。 |
+
+### New findings
+| ID | Severity | Location | Finding | Suggested direction |
+| --- | --- | --- | --- | --- |
+| B2-R2-1 | suggestion | `ledger.py:307-320`（`open_read_only`） | 只读打开先检查文件是否存在，再用普通 `sqlite3.connect(str(path))`。如果两步之间文件消失，`connect` 会创建一个空的 `ledger.sqlite3`。探测中模拟了检查通过但文件不存在的情况：报 `Unsupported ledger schema version 0`，同时留下了新文件。这与 B4“只读、不写任何文件”的要求冲突，但只在竞态时出现。 | 改用 `sqlite3.connect(f"{path.as_uri()}?mode=rw", uri=True, ...)`。探测确认：`mode=rw` 不会创建缺失的文件（`unable to open database file`），也不会出现 `mode=ro` 的 `disk I/O error`（读者持有读事务时，写者的 `BEGIN IMMEDIATE` 正常）。 |
+| B2-R2-2 | suggestion | `ledger.py:505-509` | 每次登记都要对路径的每一级目录执行 `os.listdir`。大型 Bronze/Silver 目录中有成千上万个文件时，一次回填的总开销接近 O(N²)。 | 可以只列一次直接父目录，并对上级目录做缓存；或使用 `os.scandir` 后提前结束。在 ADR-003 或 PLAN 的风险栏记录这一开销即可。 |
+| B2-R2-3 | suggestion | `ledger.py:402-407` | `COMMIT` 失败分支中的 `ROLLBACK` 没有用 try 包住。如果它也失败，抛出的就是原生 `sqlite3.Error`，而不是 `LedgerError`，与 B2-R1-3 已修复的出错分支不一致。 | 与出错分支一样包住，报出包含两个原因的 `LedgerError`。 |
+
+### Analyst response
+| ID | Action (fixed / disputed / deferred-to-owner) | Detail and checks |
+| --- | --- | --- |
+| B2-R2-1 | fixed（采纳） | 同 B4-R2-2：`mode=rw`。 |
+| B2-R2-2 | 转 Reporter | 逐级列目录的开销记为已知风险；建议真实回填 PR 中按目录缓存或只列父目录并测量。 |
+| B2-R2-3 | fixed（采纳） | COMMIT 失败后的 ROLLBACK 也包装为 `LedgerError` 并保留原因。 |
+
+- Round result: `converged`（所有 R1 的 must-fix/should-fix 已解决；本轮只有 suggestion；lint、format 和全量测试均由 Reviewer 亲自运行并通过）
+
+## Block B3 · Round 2 · 2026-11-13
+
+- Revision: `codex/pr2-run-ledger` @ `1167712`（`git diff ee1ddf6..1167712 -- src/data_io/runs.py tests/test_runs.py`）；files: `src/data_io/runs.py`、`tests/test_runs.py`。
+- Checks run by Reviewer：与 B2 第 2 轮相同（同一个 `1167712` worktree）：ruff check 通过；format check 通过（30 files）；全量 `pytest` 420 passed（Python 3.9.6），另以临时 3.9 venv 运行也是 420 passed。另运行探测脚本，结果见下。
+
+### Previous findings
+| ID | Status | Evidence |
+| --- | --- | --- |
+| B3-R1-1 | resolved | `runs.py` 引入显式 `_state`；`finish` 先校验参数，`finish_run` 成功后才转为 `closed`；`__exit__` 不再依靠异常推断状态，无法记录时写 `run.finish_failed` 日志，没有原异常时抛错。`test_invalid_finish_arguments_keep_run_open`、`test_unrecordable_exit_is_logged_and_raised` 覆盖。日志文案问题见 B3-R2-1。 |
+| B3-R1-2 | resolved | `Run.start` 在 `Ledger.open` 之前调用 `run_values(**fields)`；`test_invalid_start_has_no_side_effect` 断言 `manifests/ledger.sqlite3` 与 `manifests/runs` 都不存在。 |
+| B3-R1-3 | resolved | `commit_file` 发布前依次检查 `_require_running()`、`commit_values()` 和 `ledger.require_running()`；测试匹配具体消息并断言没有产生文件。发布后才可能出现的失败（checkpoint 版本过期）由 `test_registration_failure_after_publication_leaves_file_unregistered` 覆盖。 |
+| B3-R1-4 | resolved | `Run.start` 在任何副作用前比较解析后的 `DATA_ROOT` 与 `layout.root`，以及两处锁等待秒数；有测试覆盖。 |
+| B3-R1-5 | resolved | `error` 必须为字符串，且只能用于 `partial`/`failed`；有测试覆盖。 |
+| B3-R1-6 | out-of-scope（未变） | 按约定交给 B4 或后续 PR。 |
+| B3-R1-7 | out-of-scope（未变） | 按约定交给 PR3。 |
+
+### New findings
+| ID | Severity | Location | Finding | Suggested direction |
+| --- | --- | --- | --- | --- |
+| B3-R2-1 | should-fix | `runs.py` `__exit__` 的 `except LedgerError as finish_exc` 分支（日志 `cannot record failed run; it remains marked running in the ledger` 与随后抛出的 `... could not be recorded as failed`） | `finish("failed")` 有两种失败方式，但日志和错误只按一种来写：(a) `finish_run` 本身失败，此时运行确实仍是 `running`；(b) `finish_run` 已成功、`_state` 已变为 `closed`，失败发生在发布 `record.json`/`report.md` 时。情况 (b) 下文案与事实相反。探测：先占用 `record.json` 再无 finish 退出，日志写“remains marked running”，抛出“could not be recorded as failed”，但账本中该运行的状态已是 `failed`。负责人或 audit 排查时会被误导，可能误以为需要手工补记失败状态。 | 在 except 分支按 `self._state` 区分两种情况：仍是 `running` 时保留现有文案；已是 `closed` 时写“已记为 failed，但运行记录未发布”（并附 `finish_exc`），没有原异常时抛出的 `LedgerError` 文案也要相应区分。补一个测试：占用 `record.json` 后无 finish 退出，断言账本状态为 `failed`，日志和错误消息中出现“record 未发布”，而不是“remains running”。 |
+
+### Analyst response
+| ID | Action (fixed / disputed / deferred-to-owner) | Detail and checks |
+| --- | --- | --- |
+| B3-R2-1 | fixed | `__exit__` 按 `_state` 区分：最终状态未写入时说明“仍标记为 running”，已写入时说明“已记为 failed，但运行记录未发布”；`test_exit_with_unpublishable_record_reports_failed_status` 断言账本状态为 failed 及日志和错误消息。 |
+
+- Round result: `changes requested`
+
+Analyst 检查（Round 2 修复后）：`uv run ruff check .` → All checks passed；`uv run ruff format --check .` → 通过；`uv run pytest tests/ -q` → 424 passed。
