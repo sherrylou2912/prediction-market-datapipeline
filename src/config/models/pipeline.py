@@ -160,7 +160,9 @@ class PipelineConfig(ConfigModel):
             min_free_gib=minimum,
             log_level=raw_level or runtime.log_level,
             config_dir=directory.resolve(strict=True),
-            writer_lock_timeout_seconds=int(raw_timeout) if raw_timeout else runtime.writer_lock_timeout_seconds,
+            writer_lock_timeout_seconds=int(raw_timeout.lstrip("0") or "0")
+            if raw_timeout
+            else runtime.writer_lock_timeout_seconds,
         )
         sources = {
             "data_root": "environment:DATA_ROOT",

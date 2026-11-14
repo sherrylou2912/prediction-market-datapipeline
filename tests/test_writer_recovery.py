@@ -529,6 +529,23 @@ def test_invalid_lock_timeout_environment_rejected(tmp_path: Path, value: str) -
         PipelineConfig.load(environ={"DATA_ROOT": str(tmp_path), "PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS": value})
 
 
+@pytest.mark.parametrize(("value", "expected"), [("0" * 5000 + "5", 5), ("0" * 5000, 0)])
+def test_long_zero_padded_lock_timeout_is_parsed_without_long_int_conversion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str, expected: int
+) -> None:
+    import src.config.models.pipeline as pipeline_module
+
+    def limited_int(text: object, *args: object) -> int:
+        # Python 3.11+ rejects int() of strings longer than 4300 digits.
+        if isinstance(text, str) and len(text) > 4300:
+            raise ValueError("Exceeds the limit for integer string conversion")
+        return int(text, *args)
+
+    monkeypatch.setattr(pipeline_module, "int", limited_int, raising=False)
+    environ = {"DATA_ROOT": str(tmp_path), "PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS": value}
+    assert PipelineConfig.load(environ=environ).writer_lock_timeout_seconds == expected
+
+
 def test_lock_timeout_sources(tmp_path: Path) -> None:
     environ = {"DATA_ROOT": str(tmp_path)}
     loaded = PipelineConfig.load(environ=environ)
