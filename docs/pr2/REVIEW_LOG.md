@@ -470,3 +470,483 @@ none
 | --- | --- | --- |
 
 - Round result: `converged`。B4 之前所有 must-fix 和 should-fix 都已 resolved，其中 B4-R3-1 由本轮确认；没有新的 must-fix 或 should-fix；没有待回答的阻塞问题；lint、format 和全量测试（426 passed）均由 Reviewer 在 HEAD 的独立 worktree 中亲自运行并通过。B4 的验收示例（干净返回 0；篡改、删除、未登记、遗留 partial、未结束运行、缺失 record 都报告并返回 1；不创建目录、不写文件；没有账本时报告 `absent`）已由测试和本轮 CLI 探测再次确认。B4-R4-1 是 suggestion，交给 Reporter。说明：以上只证明本机（macOS、CPython 3.9.6、系统自带 SQLite）上的行为；Linux 上 SQLite 是否会留下 `-shm` 没有实测，但新测试在不留 `-shm` 时会自己造一个，所以代码分支在两种情况下都有覆盖。
+
+## Block B1 · Round 4 · 2026-11-18
+
+**结论先说：** 第 3 轮留下的 B1-R2-1 已经真正修好，这次在真正的 Python 3.13 上验证过。P1-F1 的文档修改大体正确，但有一句话说得太绝对（B1-R4-1，should-fix）：账本锁等不到时，文件**不一定**已经写入，要看卡在哪一步。P1-F2 和 P1-F3 负责人已决定在本 PR 处理，做法需要负责人选，下面作为两个 blocking 问题提出。本轮结果：`waiting for owner`。
+
+先解释两个词：
+- **锁**：像一个只有一把钥匙的房间。同一时间只有拿到钥匙的任务能写数据，别的任务要等钥匙。本项目有两把锁：`.writer.lock` 管“往数据目录写文件”，SQLite 自己的锁管“改账本”。
+- **账本**：`DATA_ROOT/manifests/ledger.sqlite3`，记录每次运行、每个已登记文件和 checkpoint。
+
+- Revision: `codex/pr2-run-ledger` @ `4cd778e`（HEAD），加上工作区未提交的 `CHANGELOG.md`、`README.md`、`src/config/README.md`、`src/config/README_FOR_DEVELOPER.md`（B1 Analyst 的 P1-F1 文档修改）。`9d0e8f3`（B1-R2-1 的修复）已在 HEAD 的历史里（`git branch --contains 9d0e8f3` → `codex/pr2-run-ledger`），本轮复核其中的 `src/config/models/pipeline.py` 和 `tests/test_writer_recovery.py`。工作区里的根目录 `AGENTS.md` 是工作流文档，不属于 B1，未审查。`git diff` 显示的四个文档改动与 revision packet 所述一致。
+- Addresses: B1-R2-1（升级后修复的复核，依据 `PLAN.md` §4b）；P1-F1（文档）；P1-F2、P1-F3（按 §4b 由 Reviewer 向负责人提问）；同时复查 B1 之前的所有发现。
+- Checks run by Reviewer：
+  - `uv run ruff check .` → All checks passed!
+  - `uv run ruff format --check .` → 30 files already formatted
+  - `uv run pytest tests/ -v` → 426 passed in 5.71s（主工作区，CPython 3.9.6）
+  - `uv run pytest tests/ -q -k "lock or invalid_fields or json_default or zero_padded"` → 40 passed, 386 deselected
+  - **真实 Python 3.13 探测**（scratchpad 中用 `uv venv --python 3.13` 建临时环境，CPython 3.13.18，装上 pydantic、python-dotenv、pytest、duckdb、pyarrow；结束后已删除）：`PYTHONPATH=. <venv>/bin/python <scratchpad>/probe-b1r4/cfg.py`，`PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS` 取 `"0"*5000+"5"` → 5；`"0"*5000` → 0；`"0"*10000+"1"` → 1；`"9"*5000` → `ConfigError`；`"0"*5000+"3601"` → `ConfigError`；`"0003600"` → 3600；`"3601"` → `ConfigError`；`" 0030 "` → 30。来源都记为 `environment:PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS`。没有任何输入再抛出原生 `ValueError`。
+  - **回归保护验证**：在 scratchpad 中 `git worktree add --detach <scratchpad>/wt-b1r4 HEAD`，把那一行临时改回 `int(raw_timeout)`，`test_long_zero_padded_lock_timeout_is_parsed_without_long_int_conversion` 在 3.13.18 和 3.9.6 上都是 2 failed；改回后通过。说明这个测试在 3.9 上也能抓住回退。之后 `git worktree remove --force`，`git worktree list` 只剩主工作区。
+  - 同一 worktree 用 3.13.18 跑全量：`python -m pytest tests/ -q -p no:cacheprovider` → 2 failed, 424 passed。失败的是 PR1 的 `tests/test_adapter_contract.py::test_excessively_nested_source_json_retains_evidence[False/True]`，与 B1 无关，见 B1-R4-3。
+  - **P1-F1 文档对照探测**（`PYTHONPATH=. uv run python <scratchpad>/probe-b1r4/ledgerwait.py`）：先 `Run.start`，再用另一个 SQLite 连接占住账本锁，然后依次调用 `commit_file`、`add_counts`、`Run.start`：
+    - 另一个连接用 `BEGIN IMMEDIATE`（相当于“另一个任务正在改账本”）、写锁超时 0：三个调用都在约 5.2 秒后报 `LedgerError: ... database is locked`；`silver/trades/a.parquet` **已经写入**；放开锁后 `audit` 报 `unregistered_file` 和 `run_unfinished`。
+    - 另一个连接用 `BEGIN EXCLUSIVE`（相当于“另一个任务正在把修改真正写进账本文件”，DELETE 模式下每次提交都会短暂进入这种状态）、写锁超时 0：三个调用都在约 5.1 秒后报 `LedgerError`；但 `commit_file` 卡在写文件**之前**的检查（`Ledger query failed`），`silver/trades/a.parquet` **没有写入**，`audit` 只报 `run_unfinished`。
+    - 同样用 `BEGIN EXCLUSIVE`、写锁超时 7：三个调用都在约 7.4 秒后报 `LedgerError`，符合 `max(7, 5)`。
+  - **P1-F3 现状探测**（`PYTHONPATH=. uv run python -u <scratchpad>/probe-b1r4/starve2.py`，脚本另起一个进程 A 连续写 1 字节小文件 3.5 秒，主进程 B 在 0.3 秒后用 2 秒等待时间写 1 个文件，重复 5 次）：3 次 B 等满 2.0 秒后报 `WriteBoundaryError`，同时 A 写了 669–680 个文件；2 次 B 分别在 1.01 秒和 0.30 秒拿到锁，此时 A（等待时间 0）反而立刻失败退出。数据都没有损坏。这只测了现在的代码；Analyst 所说方案 B 的效果（0.001–0.003 秒拿到锁）我没有复现。
+  - **P1-F2 现状核对**：`grep -rn "DataLayout.create(" src/` → 只有 `src/data_io/runs.py:7`（模块说明里的示例）和 `src/config/README.md:29,74`（文档），没有真实写任务；`tests/` 中 61 处、`Run.start(` 19 处，与 packet 一致。`src/data_io/runs.py:121-123` 的一致性检查确认存在。
+  - 探测数据都放在 scratchpad 的专用目录，结束后已删除。
+
+### Previous findings
+| ID | Status | Evidence |
+| --- | --- | --- |
+| B1-R2-1 | resolved | `src/config/models/pipeline.py:163` 改为 `int(raw_timeout.lstrip("0") or "0")`，配合第 155-156 行“去零后超过 4 位就报 `ConfigError`”，传给 `int()` 的字符串最多 4 位。真实 3.13.18 上全部长输入都得到正确数字或 `ConfigError`（见上）。新测试用替身 `int` 模拟 3.11+ 的长度限制，撤销修复后在 3.9 和 3.13 上都失败，能防止回退。 |
+| B1-R1-1 | resolved（维持） | 相关测试都在 40 个目标用例中通过。 |
+| B1-R1-2 | resolved（维持） | `pipeline.py:175-180` 来源区分未变；`test_lock_timeout_sources` 通过。 |
+| B1-R1-3 ~ B1-R1-6 | resolved（维持，已采纳的 suggestion） | 代码未变，测试通过。 |
+| B1-R1-7 | resolved（由 B4 完成） | `CHANGELOG.md:10` 有 PR2 的写锁条目；ADR-003 第 17 行记录了账本等待规则。 |
+
+### New findings
+| ID | Severity | Location | Finding | Suggested direction |
+| --- | --- | --- | --- | --- |
+| B1-R4-1 | should-fix | `README.md:56`、`src/config/README.md:29`（未提交的 P1-F1 修改）；代码 `src/data_io/runs.py:174-178` | 文档说“账本锁等完仍拿不到时报 `LedgerError`，**此时文件已写入但未登记**”，还说 `commit_file`“最多停顿 5 秒”。实际 `commit_file` 碰账本两次：先在写文件**之前**检查运行是否还在进行（第 174 行 `require_running`），写完文件后再登记（第 178 行 `commit`），两步各自最多等 5 秒。例子（已实测）：另一个任务正在把修改写进账本文件时，第一步就等不到，5.1 秒后报错，文件**没有**写入，audit 也不会报未登记文件；另一个任务只是开始改账本时，第二步等不到，文件**已**写入，audit 报 `unregistered_file`。按代码推断（未实测），如果第一步等了接近 5 秒才拿到，第二步又等 5 秒，总共可能停约 10 秒。这正是 P1-F1 要讲清楚的事情，写错会让排查问题的人以为“报错了文件就一定在磁盘上”。 | 两份 README 改成大意：“每次碰账本最多等 `max(writer_lock_timeout_seconds, 5)` 秒。`commit_file` 碰两次：写文件前检查一次，写文件后登记一次。卡在检查时文件不会写入；卡在登记时文件已写入但未登记，由 `python -m src audit` 报告。”去掉“最多 5 秒”这种总时长说法，或改成“每一步最多 5 秒”。`CHANGELOG.md:10` 和 `README_FOR_DEVELOPER.md` 的写法正确，不用改。 |
+| B1-R4-2 | suggestion | `tests/test_writer_recovery.py:532` | 参数化用例没有给名字，`pytest -v` 会把 5000 个 `0` 整段打印成测试名，输出很难看。 | 加 `ids=["zero_padded_5", "all_zeros"]`。 |
+| B1-R4-3 | out-of-scope | `tests/test_adapter_contract.py:494-502`（PR1） | 在 Python 3.13.18 上这两个用例失败：嵌套 1200 层的 JSON 在 3.13 上能正常解析，不再触发 `RecursionError`，于是报的是“缺少字段”。错误仍然被抛出、原始数据仍然保留，所以没有数据被悄悄丢掉，只是测试假设的“原因”不同。项目声明支持 Python 3.9 及以上，这属于 PR1 的兼容性问题，不是 B1 的。 | 交给 Reporter 作为提议：以后在 3.11+ 上跑一次全量测试，把这个用例改成不依赖解释器的递归限制（例如嵌套更深，或只断言抛出 `NormalizationError` 并保留原始数据）。 |
+
+### Owner questions
+
+**问题 1（P1-F2，blocking）：怎样保证以后的真实写任务一定用上配置里的“等锁秒数”？**
+
+1. 背景：`writer_lock_timeout_seconds` 是“钥匙被别人拿着时最多等几秒”，它写在配置里，但现在要靠每个写任务自己记得把它传给 `DataLayout.create`（建数据目录、拿到写入工具的那一步），忘了传就等于 0 秒。
+2. 场景：你把 `PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS` 设成 30。PR3 写下载器的人写成了 `DataLayout.create(root)`，忘了传这个值。10:00:00 回填任务正在写文件；10:00:01 下载器启动，发现钥匙被占，**立刻**失败，而不是等 30 秒。如果下载器用了 `Run.start`，会因为“配置是 30、实际是 0”报错，能发现；如果是不经过 `Run` 的小工具，没人会发现它一直按 0 秒在跑。现在代码里还没有真实写任务，所以这个问题只是“以后可能发生”。
+3. 选项：
+   - **A. 只留一个入口。** 在 `src/data_io/` 加一个函数，例如 `open_write_layout(config)`：先做写入前检查 `validate_for_write()`，再用配置里的秒数建目录。再加一个自动测试：扫描 `src/` 下的代码，发现有人直接写 `DataLayout.create(` 就让测试失败。会发生什么：以后的任务只能走这个入口，忘传参数的情况不会出现；测试代码不受影响。代价：约 10 行代码加 2 个测试；“扫描源码”的测试比较死板，将来真有特殊需要时要改这个测试。
+   - **B. 让 `Run.start` 自己建目录。** 写任务只给 `Run.start` 配置，由它建目录。会发生什么：用 `Run` 的任务不会出错。代价：要改约 19 处测试；不经过 `Run` 的任务仍然可能忘传。
+   - **C. 去掉默认值。** `DataLayout.create` 必须明确写出等待秒数，不写就报错。会发生什么：不会“不知不觉用 0”。代价：要改约 61 处测试；任务仍可以手写一个数字（比如 0），不保证这个数字来自配置。
+4. 我的建议：**A**。只有它能保证数字一定来自配置，而且同时保证“先检查、再建目录”的顺序（硬规则 9），代价最小，违反时测试会自动报出来。
+
+**问题 2（P1-F3，blocking）：多个任务等同一把写锁时，要不要保证“先来的先拿到”？**
+
+1. 背景：现在等钥匙的方式叫“轮询”：每隔 50 毫秒（1 毫秒是千分之一秒）去看一眼钥匙在不在；如果占着钥匙的任务一放下就马上又拿起来（中间不到 1 毫秒），等的人每次去看都刚好看到钥匙被拿着，可能一直等到超时。
+2. 场景（我本轮实测）：任务 A 不停地写 1 字节的小文件，每写一个就拿一次、放一次钥匙；任务 B 只想写 1 个文件，最多等 2 秒。5 次试验里有 3 次 B 等满 2 秒后报错，同时 A 写了约 670 个文件；另外 2 次 B 运气好拿到了钥匙，结果 A（等待时间 0）反而立刻失败。时间线：10:00:00.000 A 放下钥匙；10:00:00.0001 A 又拿起钥匙；10:00:00.050 B 来看，被占；…… 10:00:02.000 B 报“等了 2 秒”退出。数据不会坏，失败的任务会明确报错，只是“该写的没写成”。如果 A 每写一个文件之间停 1–10 毫秒，Analyst 测到 B 在 0.01–0.4 秒内就能拿到（这个数字我没有复现）。
+3. 选项：
+   - **A. 只写进文档。** 说明“不保证先来先得”，建议连续写很多文件的任务在文件之间稍停一下，或调大等待时间。会发生什么：代码不变；以后实时采集和回填同时跑时，可能有一个反复失败。代价：零代码，风险留给以后。
+   - **B. 改成“等通知”。** 等的人不再每 50 毫秒去看一次，而是请操作系统“钥匙一放下就叫醒我”。为了能在超时时放弃，这个等待放在一个后台线程里（线程是同一个程序里同时干另一件事的帮手），主程序负责计时；超时放弃后，那个帮手以后拿到钥匙会马上还回去。会发生什么：Analyst 在 macOS 上测到 B 5 次都在 0.001–0.003 秒内拿到钥匙。代价：约 30–40 行代码；不是严格的先来先得，只是等的人会先被叫醒，所以几乎总能拿到；只在 macOS 上测过，而正式服务器很可能是 Linux，需要在 Linux 上再测；超时后的帮手会一直留到钥匙空出来为止。
+   - **C. 严格排队取号。** 在 `DATA_ROOT/.writer.queue/` 下给每个等待的任务发一个号，按号依次拿钥匙，并能识别崩溃任务留下的号。会发生什么：严格先来先得。代价：约 100 行；磁盘上多出需要清理的排队文件；任务崩溃后的残留号码会让半夜排查问题更难。
+4. 我的建议：**B**，并附两个条件：加一个自动测试，复现“一个任务连续写、另一个任务能在等待时间内拿到钥匙”；在 PR 合并前至少在 Linux 上实测一次（做不到就在文档里写明“只在 macOS 验证过”）。理由：它直接解决了实测出来的问题，改动小，失败时仍然是明确报错；C 太重，A 等于把问题留给以后。
+
+### Analyst response
+| ID | Action (fixed / disputed / deferred-to-owner) | Detail and checks |
+| --- | --- | --- |
+
+- Round result: `waiting for owner`。两个 blocking 问题（P1-F2、P1-F3）要等负责人回答；B1-R4-1（should-fix）可以和负责人选定的做法一起交给下一轮 Analyst。B1-R2-1 已 resolved。lint、format 和全量测试（426 passed）由 Reviewer 本轮亲自运行通过；但因为还有未解决的 should-fix 和 blocking 问题，B1 尚未收敛。说明：以上探测只在本机（macOS、CPython 3.9.6 和 3.13.18）上运行，Linux 行为未测。
+
+负责人确认（2026-11-19）：问题 1（P1-F2）选 A；问题 2（P1-F3）选 B，附 Reviewer 提出的两个条件（自动测试；合并前 Linux 实测或在文档写明只在 macOS 验证）。
+
+### Analyst response（Analyst 第 5 步，2026-11-19，由 Orchestrator 按 Analyst 回复填写）
+| ID | Action | Detail and checks |
+| --- | --- | --- |
+| B1-R4-1 | fixed | `README.md` 写锁段落、`src/config/README.md:29`、`README_FOR_DEVELOPER.md`：每次访问账本最多等 `max(writer_lock_timeout_seconds, 5)` 秒；`Run.commit_file` 访问两次（写前检查、写后登记），卡在检查时文件不写入，卡在登记时文件已写入但未登记、由 `audit` 报告；删掉“最多 5 秒”的总时长说法。 |
+| B1-R4-2 | fixed（采纳 suggestion） | `tests/test_writer_recovery.py` 参数化用例加 `ids=["zero_padded_5", "all_zeros"]`。 |
+| P1-F2 | fixed（负责人选 A） | `src/data_io/layout.py` 新增 `open_write_layout(config)`：类型检查 → `validate_for_write()` → `DataLayout.create(..., lock_timeout_seconds=config.writer_lock_timeout_seconds)`；文档示例改用它；测试 `test_open_write_layout_uses_configured_timeout`、`test_open_write_layout_runs_write_preflight_before_layout`、语法树扫描 `test_only_open_write_layout_calls_datalayout_create_in_src`。 |
+| P1-F3 | fixed（负责人选 B） | `_lock` 先试 `LOCK_NB`；超时 0 立即失败、不起线程；否则后台线程用自己的句柄阻塞 `flock`，调用方计时，放弃后拿到锁立即释放，打断时不留锁，线程加锁出错转 `WriteBoundaryError`。新增 6 个测试（含条件 1 的连续写场景）；条件 2：无 Linux 环境，README、ADR-003、`src/config/README.md`、CHANGELOG、`layout.py` 说明写明只在 macOS 验证。Analyst 检查：ruff、format 通过；全量 436 passed（含 B2 未提交测试）；相关测试连跑 20 次全部通过；换回旧轮询后连续写测试 3/3 失败。 |
+
+## Block B2 · Round 3 · 2026-11-19
+
+**结论先说：** P1-F5（版本检查放到 watermark 检查前面）已经正确完成，第 3 轮提出的 B2-R3-1（相对路径）也确认修好。没有新的 must-fix 或 should-fix。但 P1-F4（数据集必须放在自己的文件夹里）还没有做，因为路径规则要负责人定。负责人已决定这件事在本 PR 做，所以下面作为一个 blocking 问题提出。本轮结果：`waiting for owner`。
+
+先解释几个词：
+- **数据集**：一类数据的名字，例如 `silver.trades`（统一格式后的成交记录）、`silver.markets`（市场信息）、`gold.market_1m`（1 分钟研究产品）。点号前面是层，后面是名字。
+- **registry**：`src/data_schema/schema_registry.json`，列出全部 14 个数据集和它们的字段，但没有写文件该放在哪个目录。
+- **manifest 登记**：账本里给每个数据文件记一张“身份证”（路径、行数、校验和、属于哪个数据集）。
+- **checkpoint 与 version**：checkpoint 记录“采集进行到哪里了”；每推进一次 version 加 1。推进时调用方要说明“我看到的是第几版”（`expected_version`），对不上就说明别人已经抢先推进过。watermark 是“数据已经覆盖到的时间”，不能往回退。
+
+- Revision: `codex/pr2-run-ledger` @ `4cd778e`（HEAD）加上工作区中 B2 Analyst 未提交的 `src/data_io/ledger.py`、`tests/test_ledger.py`；另外复核从未审查过的 `e69f167` 中 B2-R3-1 的修复（`ledger.py` 中 `path.absolute().as_uri()`、`tests/test_ledger.py` 中 `test_read_only_open_accepts_a_relative_root`）。`git diff --stat -- src/data_io/ledger.py tests/test_ledger.py` → 2 个文件，+39/−4，与 revision packet 所述一致。工作区里其他未提交改动（`layout.py`、各 README、`CHANGELOG.md`、`AGENTS.md` 等，B1 Analyst 正在修改）不在本轮范围，没有审查，也没有放进检查环境。
+- Addresses: P1-F5；B2-R3-1（`e69f167` 的复核）；P1-F4（按 `PLAN.md` §4b 由 Reviewer 向负责人提问）；同时复查 B2 之前所有发现和 `PLAN.md` B2 验收示例。
+- 审查方式：为了不受 B1 并行修改的影响，在本会话 scratchpad 中 `git worktree add --detach <scratchpad>/wt-b2r3 HEAD`，再执行 `git -C <repo> diff -- src/data_io/ledger.py tests/test_ledger.py | git -C <worktree> apply`，worktree 中只有这两个文件有改动（`git status --short` 确认）。所有检查都在这个 worktree 中运行。结束后 `git worktree remove --force`，`git worktree list` 只剩主工作区；探测数据按确切路径删除。
+- Checks run by Reviewer（均在上述 worktree 内，CPython 3.9.6）：
+  - `uv run ruff check .` → All checks passed!
+  - `uv run ruff format --check .` → 30 files already formatted
+  - `uv run pytest tests/ -v` → 427 passed in 6.15s
+  - `uv run pytest tests/test_ledger.py -q` → 27 passed
+  - `uv run pytest tests/test_ledger.py tests/test_runs.py tests/test_audit.py -q` → 51 passed
+  - **新测试能否抓住旧代码**：在 worktree 中 `git checkout -- src/data_io/ledger.py`（恢复为 HEAD 的旧顺序），`uv run pytest tests/test_ledger.py -q -k "stale_racing or watermark"` → `test_stale_racing_run_reports_version_conflict_before_watermark` 失败，报的正是 `Checkpoint k watermark cannot move backwards or be removed`；重新应用修复后 `-k "stale_racing or watermark or relative"` → 4 passed。
+  - **B2-R3-1 的测试能否抓住旧代码**：临时把 `path.absolute().as_uri()` 改回 `path.as_uri()`，`uv run pytest tests/test_ledger.py -q -k relative` → 1 failed（原生 `ValueError: relative path can't be expressed as a file URI`）；恢复后通过。
+  - 探测脚本（scratchpad，未入库，`PYTHONPATH=. uv run python <scratchpad>/probe-b2r3/probe_f4.py <dir>`）：
+    1. **P1-F4 现状**：以下 5 个“放错位置”的登记全部成功：`silver.trades` 放在 `silver/quotes/c.parquet`、`silver/markets/m.parquet`（另一个已有数据集的目录）、`silver/flat.parquet`（没有数据集目录）；`gold.market_1m` 放在 `gold/kalshi/MKT-1/market_1s/v1/20261113.parquet`（产品名是 `market_1s`）；`gold.training_datasets` 放在 `gold/x/a.parquet`。
+    2. **检查顺序**：checkpoint `k` 在 version 1、watermark T0。`expected_version=0`、不带 watermark → 报 `is at version 1, expected 0`；`expected_version=1`、watermark 比 T0 早 1 秒 → 报 `watermark cannot move backwards`；`expected_version=1`、不带 watermark → 报 `watermark cannot move backwards`；`expected_version=5`、watermark 晚一天 → 报 `is at version 1, expected 5`。四次都没有登记任何东西（manifest 数、`rows_written`、checkpoint version 都不变）。也就是说：版本对得上时，watermark 后退仍然被拒绝；版本对不上时，先报版本冲突。
+  - 事实核对：`schema_registry.json` 版本 7.0.0，14 个数据集（`bronze.raw`；8 个 silver；5 个 gold），每个只有 `fields`、`primary_key`、`rules`，没有路径信息。8 个 silver 数据集的名字与 `agent/PROJECT.md` §5 的 silver 子目录完全一一对应。5 个 gold 产品的主键都含 `venue`、`market_id`；`gold.training_datasets` 的主键是 `dataset_name, venue, market_id, observation_time`，即一个训练集包含很多市场的行。`docs/FOUNDATION_RULES.md:87` 的 gold 路径注明“仅示意”。`src/data_io/runs.py:171-174`：`commit_file` 先调用 `commit_values` 再写文件，所以以后在 `commit_values` 里加的路径检查会在写文件前拒绝。
+
+### Previous findings
+| ID | Status | Evidence |
+| --- | --- | --- |
+| P1-F5 | resolved | `ledger.py` 中版本检查已移到 watermark 检查之前，两条错误文字没变，两者仍在同一个事务里，出错时 manifest 插入和 `rows_written` 一起回滚。新测试 `test_stale_racing_run_reports_version_conflict_before_watermark` 断言两种迟到情况（不带 watermark；watermark 介于两次推进之间）都报 `is at version 2, expected 1; nothing was registered`，且表、`run-2` 的 `rows_written`、checkpoint、`run-2` 的 manifest 和 checkpoint 历史都不变。撤销修复后该测试失败（见上）。原有 `test_watermark_cannot_move_backwards_or_disappear` 仍通过，探测 2 也确认版本正确时 watermark 后退仍被拒绝。`README.md:83` 和 ADR-003 第 19 行都没有写两项检查的先后，不需要改文档。 |
+| B2-R3-1 | resolved | `e69f167` 把 `open_read_only` 改为 `path.absolute().as_uri()`；`test_read_only_open_accepts_a_relative_root` 通过，改回旧写法时这个测试以原生 `ValueError` 失败。 |
+| B2-R1-1 ~ B2-R1-6 | resolved（维持） | 相关代码未变；`test_case_variant_path_cannot_register_the_same_file_twice`、`test_concurrent_reader_does_not_fail_a_commit`、`test_rollback_after_sqlite_auto_rollback_keeps_original_error`、`test_non_delete_journal_mode_is_rejected`、`test_watermark_cannot_move_backwards_or_disappear`、`test_registry_writer_cannot_create_ledger_files` 均通过。 |
+| B2-R2-1、B2-R2-3 | resolved（维持，已采纳的 suggestion） | `mode=rw` 只读打开和 COMMIT 失败后的 ROLLBACK 包装未变。 |
+| B2-R2-2 | out-of-scope（未变） | 已记入 `PLAN.md` §4c，由真实回填 PR 测量。 |
+
+B2 验收示例（`PLAN.md` §4 B2）逐条对照，全部有通过的测试：校验和由账本计算（`test_commit_registers_manifest_and_advances_checkpoint`）；文件不存在、不在对应层、数据集未知、时间不是 UTC、范围颠倒时拒绝且账本不变（`test_invalid_commit_is_rejected_without_change` 的 11 个参数）；`expected_version` 不符时拒绝且不登记 manifest（`test_stale_checkpoint_version_registers_nothing` 和新测试）；运行已结束、同一路径重复登记被拒绝（`test_duplicate_registration_and_finished_run_rejected`）；未知 `user_version`、账本为软链接时拒绝打开（`test_ledger_persists_and_rejects_unknown_schema_or_symlink`）。验收示例中的“不在对应层”目前只查到层，不查到数据集目录，这正是 P1-F4。
+
+### New findings
+| ID | Severity | Location | Finding | Suggested direction |
+| --- | --- | --- | --- | --- |
+| B2-R3-2 | owner-question（blocking） | `src/data_io/ledger.py` `commit_values`（`relative.parts[0] != layer` 只查第一级）；`docs/adr/ADR-003-pr2-sqlite-ledger.md:15` | P1-F4 尚未实现：数据集和目录对不上时照样登记（探测 1，5 个例子全部成功）。负责人已决定本 PR 处理，但路径规则要负责人选，见下方问题。 | 负责人回答后，由 Analyst 在 `commit_values` 中加检查（这样 `Run.commit_file` 会在写文件之前就拒绝），在 ADR-003 第 15 行写明规则；如果选了改目录约定的方案，同步改 `agent/PROJECT.md` §5 和 `docs/FOUNDATION_RULES.md` §7。测试至少包括：放到别的数据集目录、放在层根下、产品名不对，都被拒绝且账本不变；正确位置照常登记；bronze 不受影响。 |
+
+### Owner questions
+
+**问题（P1-F4，blocking）：一个数据文件必须放在哪个文件夹里，账本才允许登记？**
+
+1. 背景：现在账本登记文件时，只检查它在不在正确的“层”（`bronze/`、`silver/`、`gold/`）下面，不检查它是不是放在自己数据集的文件夹里。
+2. 场景（本轮实测）：一个任务把成交记录（数据集 `silver.trades`）写成了 `silver/markets/m.parquet`，账本照样登记成功。以后研究时读取 `silver/markets/` 下的全部文件，会把成交记录当成市场信息读进来；同样，`gold.market_1m` 的文件放进名为 `market_1s` 的文件夹也能登记。
+   说明：不管选哪个方案，bronze 都只检查层。bronze 只有一个数据集 `bronze.raw`，放在 `bronze/` 下任何位置都不会和别的数据集混；它下面按来源分（例如 `bronze/kalshi/…`），保持不变。silver 也没有争议：第二级目录必须是数据集名，`silver/trades/…` 只能登记 `silver.trades`，和 `PROJECT.md` §5 现有的 8 个目录完全一致。**真正要选的是 gold。** gold 有 5 个产品，现有文档只给了 `market_1m` 一个路径示例：`gold/<venue>/<market_id>/market_1m/<数据版本>/<UTC 日期>.parquet`（产品名在第四级）；另外 4 个（`market_daily`、`market_1s`、`liquidity_features`、`training_datasets`）还没有路径约定。其中 `training_datasets`（训练集）一个文件里有很多市场的数据，没法放进“某个 venue 的某个市场”这样的文件夹。
+3. 选项：
+   - **A. 保留现有 gold 路径，产品名必须在第四级。** 例如 `gold/kalshi/MKT-1/market_1m/v1/20261113.parquet` 可以登记，`gold/kalshi/MKT-1/market_1s/…` 不能登记为 `market_1m`。还要再选一项：没有路径约定的 4 个产品怎么办：
+     - A1：先按同样的形状要求（`gold/<venue>/<market_id>/<产品名>/…`）。代价：`training_datasets` 跨很多市场，放不进去，等于还是不能登记，或者以后要改规则。
+     - A2：先拒绝登记，等以后做这些产品的 PR 定好路径再放开。代价：以后每做一个 gold 产品都要回来改账本规则。
+     A 的共同代价：不用改文档；但规则依赖“第几级”，要求 venue 和市场 ID 都恰好只占一级目录（市场 ID 怎么安全变成目录名还没定）。
+   - **B. gold 改成“产品名放第二级”，和 silver 用同一条规则。** 规则只有一句：silver 和 gold 的第二级目录必须是数据集名。`market_1m` 的路径变成 `gold/market_1m/<venue>/<market_id>/<数据版本>/<UTC 日期>.parquet`，内容和“一个文件只含一个市场、一个 UTC 日期”的规则都不变，只是产品名移到最前面；训练集可以放 `gold/training_datasets/<训练集名>/…`。会发生什么：5 个 gold 产品现在都能正确登记，不用猜。代价：要改你确认过的 `PROJECT.md` §5 和 `FOUNDATION_RULES.md` §7 中的 gold 路径示例；现在还没有任何 gold 文件，不用搬数据。第二级以下的结构（venue、市场、版本、日期）这次不检查，留给做各个 gold 产品的 PR。
+   - **C. 在 registry 里给每个数据集写一个完整的路径模板**，例如 `silver.trades → silver/trades/<venue>/<日期>.parquet`，每一级都检查。会发生什么：最严格。代价：要改数据契约（registry 从 7.0.0 升版本），而且要为还没设计的 gold 产品现在就猜路径，猜错以后还得再改契约；改动最大。
+4. 我的建议：**B**。一条规则就覆盖全部 14 个数据集，不用为还没设计的 4 个 gold 产品猜路径或先拒绝，跨市场的训练集也放得下；代价只是改两处文档里的示例，而且现在没有 gold 数据需要移动。（Analyst 推荐的是 A；如果你更想保留现有 gold 路径，我建议 A 里选 A2：先拒绝、等定好路径再放开，因为正确性优先，不猜。）
+
+### Analyst response
+| ID | Action (fixed / disputed / deferred-to-owner) | Detail and checks |
+| --- | --- | --- |
+
+- Round result: `waiting for owner`。P1-F5 和 B2-R3-1 已 resolved；B2 之前所有 must-fix 和 should-fix 仍为 resolved；没有新的 must-fix 或 should-fix。lint、format 和全量测试（427 passed）由 Reviewer 在只含 B2 改动的独立 worktree 中亲自运行并通过。B2 不能收敛的唯一原因是 P1-F4 的 blocking 问题（B2-R3-2）：负责人回答后，由新的 Analyst 按答案实现，再由新的 Reviewer 复核。说明：以上只在本机（macOS、CPython 3.9.6）上运行。
+
+负责人确认（2026-11-19）：B2-R3-2（P1-F4）选 B，silver 和 gold 的第二级目录必须等于数据集名，bronze 只查层；同步修改 PROJECT.md §5 和 FOUNDATION_RULES §7 的 gold 路径示例。
+
+### Analyst response（Analyst 步骤，2026-11-19，由 Orchestrator 按 Analyst 回复填写）
+| ID | Action | Detail and checks |
+| --- | --- | --- |
+| B2-R3-2 | fixed（负责人选 B） | `commit_values`：非 bronze 数据集要求路径至少三段且第二段等于数据集名（区分大小写），否则 `LedgerError`；`Run.commit_file` 在写文件前调用它，放错位置的文件不会写入。测试：`test_file_outside_its_dataset_folder_is_rejected_without_change`（8 个参数）、`test_files_in_their_dataset_folder_register`（13 个 silver/gold 数据集 + 3 个真实形状）、`test_bronze_files_are_checked_by_layer_only`、`tests/test_runs.py::test_file_outside_its_dataset_folder_is_not_written`。文档：ADR-003、`agent/PROJECT.md` §5、`docs/FOUNDATION_RULES.md` §7 的 gold 路径改为产品名在第二级，README、CHANGELOG 各加一条。Analyst 检查：ruff、format 通过；全量 447 passed（含 B1 未提交改动）；关掉新检查后 9 个新测试失败。 |
+
+## Block B2 · Round 4 · 2026-11-19
+
+**结论先说：** P1-F4（数据文件必须放在自己数据集的文件夹里）已按负责人选的方案 B 正确实现，P1-F5（版本检查先于 watermark 检查）维持正确。没有新的 must-fix 或 should-fix，只有 1 条措辞上的 suggestion。lint、format 和全量测试（447 passed）由我在独立 worktree 中亲自运行并通过。本轮结果：`converged`。
+
+先解释两个词：
+- **路径的第几段**：路径按 `/` 切开后的每一部分。例如 `gold/market_1m/kalshi/MKT-1/v1/20261113.parquet` 的第一段是层 `gold`，第二段是 `market_1m`。
+- **变异检查**：故意把新加的检查关掉或改坏，看测试会不会失败。测试失败，说明它真的在保护这条规则。
+
+- Revision: `codex/pr2-run-ledger` @ `4cd778e`（HEAD）+ B1 的 `b1-round5.patch`（作为底座，不在本轮审查范围）+ B2 的 `b2-round4.patch`；B2 补丁涉及的文件：`src/data_io/ledger.py`、`tests/test_ledger.py`、`tests/test_runs.py`、`docs/adr/ADR-003-pr2-sqlite-ledger.md`、`agent/PROJECT.md`、`docs/FOUNDATION_RULES.md`、`README.md`、`CHANGELOG.md`。两份补丁都能干净应用（`git apply --check` 通过）。应用后 worktree 中 12 个对比文件与主工作区当前未提交内容逐字节一致（`cmp`），即 revision packet 与磁盘一致。
+- Addresses: P1-F4（B2-R3-2，负责人 2026-11-19 选 B）；复查 P1-F5；同时复查 B2 之前所有发现。
+- 审查方式：在本会话 scratchpad 中 `git worktree add --detach <scratchpad>/wt-b2r4 HEAD`，依次 `git apply` B1、B2 补丁，所有检查和探测都在其中运行。结束后 `git worktree remove --force`，`git worktree list` 只剩主工作区和另一位 Reviewer 的 `wt-b1r5`（未动）；探测目录已删除。
+- Checks run by Reviewer（均在上述 worktree 内，CPython 3.9.6）：
+  - `uv run ruff check .` → All checks passed!
+  - `uv run ruff format --check .` → 30 files already formatted
+  - `uv run pytest tests/ -v` → 447 passed in 8.19s
+  - `uv run pytest tests/test_ledger.py tests/test_runs.py tests/test_audit.py -q` → 62 passed
+  - **变异检查 1**（把 `if layer != "bronze":` 临时改成 `if False and layer != "bronze":`，即关掉新检查）：`uv run pytest tests/ -q` → 9 failed, 438 passed。失败的正是 `test_file_outside_its_dataset_folder_is_rejected_without_change` 的 8 个参数和 `tests/test_runs.py::test_file_outside_its_dataset_folder_is_not_written`，与 Analyst 所说一致。
+  - **变异检查 2**（把比较改成不区分大小写 `relative.parts[1].casefold() != name`）：`uv run pytest tests/test_ledger.py -q` → 1 failed（`silver/Trades/a.parquet` 那一例）。说明“区分大小写”有测试保护。
+  - **变异检查 3**（去掉“至少三段”的条件 `len(relative.parts) < 3 or`）：`uv run pytest tests/ -q` → 2 failed（`silver/trades`、`gold/market_1m` 这两个“文件名就叫数据集名、直接放在层下”的例子）。说明“至少三段”也有测试保护。
+  - **变异检查 4**（P1-F5：把 B2 补丁中调换检查顺序的那一段反向应用，恢复旧顺序）：`uv run pytest tests/test_ledger.py -q -k "stale_racing or watermark"` → 1 failed, 1 passed，失败的 `test_stale_racing_run_reports_version_conflict_before_watermark` 报的是旧的 `watermark cannot move backwards`。每次变异后都把 `ledger.py` 恢复，并用 `cmp` 确认与主工作区一致。
+  - **探测**（scratchpad 脚本，未入库，`PYTHONPATH=. uv run python <scratchpad>/probe-b2r4/probe.py <dir>`）：`silver/./trades/a.parquet`、`./silver/trades/b.parquet`、`silver//trades/c.parquet` 登记成功，账本里存的是规范写法 `silver/trades/…`（Python 的 `Path` 会去掉多余的 `.` 和 `/`，这是原有行为）；`silver/trades/sub/../d.parquet` 被原有的“不能含 `..`”规则拒绝；`silver/trades /e.parquet`（目录名末尾多一个空格）和 `silver/trades.parquet/h` 被新检查拒绝，报 `silver.trades file must be under silver/trades/`；`gold/market_1m/f.parquet`、`gold/training_datasets/g.parquet`（直接放在产品目录下，没有更深的子目录）登记成功，这符合“第二级以下不检查”的决定，但见 B2-R4-1。
+  - **旧 gold 路径残留**：`grep -rn "gold/" agent docs README.md CHANGELOG.md src tests .claude AGENTS.md`（排除 `docs/pr2/`）和 `grep -rniE "<venue>/<market|venue>/<market_id>|产品名在|第四级|silver/<|gold/<"`：正式文档、代码注释、`.claude/` 和 `agent/` 中已没有“产品名在第四级”的旧写法；`docs/SCHEMAS.md`、`docs/SCHEMA_GUIDE.md`、`schema_registry.json` 只出现产品名，没有路径；README 和 `runs.py` 文档字符串中的示例路径 `silver/trades/x.parquet` 符合新规则。唯一残留是过程记录 `docs/pr2/PROGRESS.md:27` 描述 P1-F4 时引用的旧例子 `gold/<venue>/…`；它是当时问题的描述，不是规则，由 Orchestrator 更新快照时处理即可，不算发现。
+
+### Previous findings
+| ID | Status | Evidence |
+| --- | --- | --- |
+| B2-R3-2（P1-F4） | resolved | `ledger.py:235-243`：非 bronze 数据集要求路径至少三段，且第二段与数据集名完全一致（区分大小写），否则报 `LedgerError("<数据集> file must be under <层>/<名字>/: <路径>")`。检查在 `commit_values` 中，`Ledger.commit`（`:524`）和 `Run.commit_file`（`runs.py:172`，在 `write_new` 之前）都调用它，所以放错位置时既不登记也不写文件。测试覆盖：别的数据集目录（`silver/markets/` 放 `silver.trades`；`gold/market_1s/` 放 `gold.market_1m`；`gold/market_1m/` 放 `gold.training_datasets`）、直接放在层下（`silver/a.parquet`，以及文件名恰好叫 `silver/trades`、`gold/market_1m`）、旧 gold 路径（产品名在第四级）、大小写不同（`silver/Trades/`），每例都断言账本三张表和 checkpoint 历史不变；13 个 silver/gold 数据集各在自己目录下登记成功，另有 3 个真实形状的路径；bronze 第二段是来源（`bronze/kalshi/…`）照常登记，`bronze.raw` 放在 `silver/` 下仍被拒绝；`Run.commit_file` 4 种放错位置都被拒绝，且 `silver/`、`gold/` 目录保持为空，之后正确位置的文件正常登记、checkpoint 推进到 1、`rows_written` 为 2。变异检查 1–3 证明三个条件各自都有测试保护。文档：ADR-003 第 16 行、`agent/PROJECT.md` §5（目录树与说明段）、`docs/FOUNDATION_RULES.md` §7（说明与路径示例）、README、CHANGELOG 都已改为“产品名在第二级”，与负责人决定（`PLAN.md` §4b，2026-11-19）一致；没有发现遗漏的旧写法。 |
+| P1-F5 | resolved（维持） | 代码与第 3 轮确认时相同（版本检查在 watermark 检查之前，同一事务内）；变异检查 4 显示恢复旧顺序后 `test_stale_racing_run_reports_version_conflict_before_watermark` 失败；`test_watermark_cannot_move_backwards_or_disappear` 仍通过。 |
+| B2-R3-1 | resolved（维持） | `open_read_only` 相关代码未变；`test_read_only_open_accepts_a_relative_root` 在全量测试中通过。 |
+| B2-R1-1 ~ B2-R1-6、B2-R2-1、B2-R2-3 | resolved（维持） | 相关代码未变，对应测试全部在 447 个中通过。 |
+| B2-R2-2 | out-of-scope（未变） | 已在 `PLAN.md` §4c。 |
+
+`PLAN.md` §4 B2 的验收示例仍全部有通过的测试；其中“不在对应层”现在进一步检查到数据集目录（silver、gold）。
+
+### New findings
+| ID | Severity | Location | Finding | Suggested direction |
+| --- | --- | --- | --- | --- |
+| B2-R4-1 | suggestion | `docs/adr/ADR-003-pr2-sqlite-ledger.md:16` | 措辞比代码严格。ADR 写“`gold.market_1m` 只能登记 `gold/market_1m/<venue>/<market_id>/…`”“`gold.training_datasets` 只能登记 `gold/training_datasets/<训练集名>/…`”，但代码只查第二段，探测中 `gold/market_1m/f.parquet`、`gold/training_datasets/g.parquet`（没有 venue、市场或训练集名这一级）都能登记。同一句后面虽然写了“第二级以下的结构不检查”，但只读前半句的人会以为 venue、市场那几级也被检查了。这与负责人决定一致（第二级以下留给以后的 PR），只是说法容易误读，所以不阻塞。README 的写法（先给示例，再写 “Levels below the dataset folder are not checked yet”）没有这个问题。 | 把“只能登记”改为“只能登记在 `gold/market_1m/` 下（目标路径为 `gold/market_1m/<venue>/<market_id>/…`）”之类，让“检查的是哪一级”和“约定的完整路径”分开写。可在下次改 ADR-003 时顺手处理。 |
+| B2-R4-2 | out-of-scope | `src/data_io/audit.py` | `audit` 不会重新检查已登记文件是否在自己数据集的目录里（Analyst 已在 packet 中说明）。现在这不是问题：账本是本 PR 新建的，从第一条记录起就受这条规则约束，不存在规则之前登记的文件。将来如果某个 gold 产品的 PR 收紧第二级以下的规则，已登记的旧文件不会被自动复查。 | 交给 Reporter，作为后续 gold 产品 PR 的提醒：收紧路径规则时，同时让 `audit` 复查已登记文件的路径。 |
+
+### Owner questions
+无。
+
+### Analyst response
+| ID | Action (fixed / disputed / deferred-to-owner) | Detail and checks |
+| --- | --- | --- |
+
+- Round result: `converged`。B2 之前所有 must-fix 和 should-fix 都已 resolved；B2-R3-2 的 blocking 问题负责人已回答（选 B），代码和文档按答案实现；本轮没有新的 must-fix 或 should-fix（B2-R4-1 为 suggestion，B2-R4-2 为 out-of-scope，均交给 Reporter）；lint、format 和全量测试（447 passed）由 Reviewer 亲自运行并通过。说明：检查只在本机（macOS、大小写不敏感的 APFS、CPython 3.9.6）上运行；本轮的底座包含 B1 第 5 轮补丁，B1 本身由另一轮审查，如果 B1 补丁之后变化，B2 不受直接影响，但提交时应以最终合在一起的代码再跑一次全量测试。
+
+## Block B1 · Round 5 · 2026-11-19
+
+**结论先说：** 负责人选的两个做法都已实现，而且主要效果我亲自验证过：P1-F2 的唯一入口 `open_write_layout(config)` 顺序正确（先检查、再建目录、用配置里的秒数）；P1-F3 的“等通知”确实解决了“连续写时另一个任务抢不到锁”的问题（换回旧的轮询写法，新测试 3 次都失败；新写法下等待者每次约 3–17 毫秒拿到锁）。B1-R4-1、B1-R4-2 已修好。但还有三处 should-fix：(1) 防止绕过入口的源码扫描测试有漏洞，最普通的写法 `layout.DataLayout.create(...)` 就能绕过；(2) 每次“等不到、放弃”都会留下一个后台帮手和一个打开的文件，同一个程序反复重试会把“可打开文件数”用完，文档没写；(3) 程序在放弃等待之后再“分身”（fork），分身出来的子程序会一直占着锁。另有一个 suggestion。本轮结果：`changes requested`。
+
+先解释几个词：
+- **后台帮手（线程）**：同一个程序里同时干另一件事的帮手。新写法里，帮手负责“排队等钥匙”，主程序负责计时。
+- **文件句柄**：程序每打开一个文件，操作系统就发给它一个“号码牌”；号码牌有上限（macOS 终端默认常见为 256，Linux 常见为 1024），用完后程序再打开任何文件都会失败。
+- **fork（分身）**：一个程序把自己复制成两个；复制出来的子程序会带着父程序所有打开文件的号码牌副本。Python 的 `multiprocessing` 在 Linux 上（Python 3.13 及以前）默认就用这种方式起子进程。
+
+- Revision: `codex/pr2-run-ledger` @ `4cd778e` + B1 补丁 `<scratchpad>/b1-round5.patch`。按隔离要求，我在 scratchpad 里 `git worktree add --detach <scratchpad>/wt-b1r5 HEAD`，`git apply` 补丁，`git status --short` 显示 8 个文件被修改：`CHANGELOG.md`、`README.md`、`docs/adr/ADR-003-pr2-sqlite-ledger.md`、`src/config/README.md`、`src/config/README_FOR_DEVELOPER.md`、`src/data_io/layout.py`、`src/data_io/runs.py`、`tests/test_writer_recovery.py`，与 packet 一致，没有未跟踪文件。全部阅读、检查和探测都在这个 worktree 里做，没有看主工作区里 B2 正在改的副本。
+- Addresses: B1-R4-1、B1-R4-2、P1-F2（负责人选 A）、P1-F3（负责人选 B，附两个条件）。
+- Checks run by Reviewer（全部在 worktree 中，CPython 3.9.6，macOS，除非另注）：
+  - `uv run ruff check .` → All checks passed!
+  - `uv run ruff format --check .` → 30 files already formatted
+  - `uv run pytest tests/ -v -p no:cacheprovider` → **435 passed** in 7.98s（= 第 4 轮的 426 + 本轮新增 9 个；Analyst 的 436 含 B2 未提交的测试，这里没有）。
+  - **重复跑，查是否偶发失败**：`uv run pytest tests/test_writer_recovery.py -q -p no:cacheprovider -k "waiter or zero_timeout or successful_wait or interrupted_wait or back_to_back or open_write_layout or lock"` 连续 30 次 → 30/30 通过（每次 26 passed, 41 deselected）。
+  - **加负载再跑**：12 核机器上起 24 个 `yes > /dev/null` 占满 CPU，同时 6 个上面的 pytest 并行，共 3 轮 → 18/18 退出码 0，每次 26 passed（4.86–5.11 秒）。
+  - **Python 3.13.18**（scratchpad 临时环境 `uv venv --python 3.13` + `uv pip install --offline pydantic python-dotenv pytest duckdb pyarrow`，结束后已删除）：全量 `python -m pytest tests/ -q -p no:cacheprovider` → 2 failed, 433 passed，失败的只是已知的 B1-R4-3（PR1 的 `test_excessively_nested_source_json_retains_evidence`）；上面的锁测试连跑 10 次 → 10/10 通过。
+  - **新测试能不能抓住旧问题**：把 worktree 里的 `_lock` 临时换回 HEAD 的轮询版本，`-k back_to_back` 跑 3 次 → 3/3 failed（B 的 `DataLayout.create(root, lock_timeout_seconds=2)` 等满 2 秒报 `WriteBoundaryError`）；换回补丁版本 → 1 passed。负责人条件 1 满足。
+  - **等待速度实测**（scratchpad 脚本 `fair.py`：子进程 A 不停写 1 字节文件，主进程 B 用 2 秒等待时间写 50 个文件，每次之间停 20 毫秒，跑 3 遍）：B 每次写入（含等锁和自己写文件）中位数 6.7–7.6 毫秒，最慢 10.8–17.4 毫秒；同期 A 写了 301–308 个文件。与文档“约 10 毫秒”大体一致。
+  - **线程/句柄探测**（`threads.py`）：① 另一个句柄一直占锁，用 1 秒等待重试 10 次：每次 1.00–1.01 秒报错，后台帮手和多占的文件句柄从 1 个涨到 10 个；放开锁后 0.001 秒内全部退出、句柄全部归还、锁是空的、没有写出任何文件。② 同一线程已经拿着锁，再用 1 秒等待写：1.00 秒后报 `WriteBoundaryError`（不会死锁），外层放锁后帮手退出、锁空、句柄归还。③ 同一进程另一个线程占锁 0.3 秒：主线程 0.310 秒拿到锁，之后无残留。④ `DataLayout.create` 等 1 秒：1.01 秒报 `WriteBoundaryError`，之后无残留。
+  - **句柄耗尽探测**（`emfile.py`，`ulimit -n 24`，起始占用 6 个）：一直占锁、1 秒等待反复重试，第 19 次报 `WriteBoundaryError: ... Too many open files`，此时同一程序里打开 `/dev/null` 也失败；放开锁后句柄恢复、再写成功。见 B1-R5-2。
+  - **fork 探测**（`fork.py`）：一次等待放弃后（帮手仍在等），程序 `os.fork()` 出一个睡 3 秒、完全不碰锁的子进程；原占锁者放锁 0.5 秒后，从外面看锁**仍被占**；子进程退出后锁才空出来。见 B1-R5-3。
+  - **打断时机探测**（`interrupt.py`）：把 `_LockWaiter.take` 临时换成“一进来就抛 `KeyboardInterrupt`”，模拟 Ctrl-C 恰好落在“帮手已启动、`take` 还没进入 `try`”的瞬间：调用方收到中断后，占锁者放锁 0.5 秒，锁仍被占，帮手线程已结束（0 个），同一程序下一次写报 “waited 0s”。见 B1-R5-4。
+  - **源码扫描测试探测**：在 worktree 的 `src/` 临时放一个 `_probe_bypass.py`，逐个换成 5 种写法后跑 `-k only_open_write_layout`：`L.DataLayout.create(root)`（`from src.data_io import layout as L`）→ 1 passed（没抓到）；`Layout.create(root)`（`import DataLayout as Layout`）→ passed；`DataLayout(root=root).writer` → passed；`ScopedWriter(root=root, role=...)` → passed；`DataLayout.create(root)` → 1 failed（抓到）。见 B1-R5-1。之后删除该文件。
+  - **硬规则 8–11 与文档对照**：见下方表格。
+  - 结束后 `git worktree remove --force <scratchpad>/wt-b1r5`，`git worktree list` 只剩主工作区 `4cd778e [codex/pr2-run-ledger]`；探测脚本、临时环境、输出文件都已删除。
+
+### Previous findings
+| ID | Status | Evidence |
+| --- | --- | --- |
+| B1-R4-1 | resolved | `README.md:60`、`src/config/README.md:29`、`README_FOR_DEVELOPER.md:29` 都改为“每次访问账本最多等 `max(writer_lock_timeout_seconds, 5)` 秒；`Run.commit_file` 访问两次；卡在写前检查时文件不写入，卡在写后登记时文件已写入但未登记，由 `audit` 报告”，与第 4 轮实测的两种情况一致；“最多 5 秒”的总时长说法已删除。CHANGELOG 第 10 行也同步写清 `.writer.lock` 与账本锁分开。 |
+| B1-R4-2 | resolved | `tests/test_writer_recovery.py:537-539` 加了 `ids=["zero_padded_5", "all_zeros"]`，`pytest -v` 输出中显示为 `[zero_padded_5]`、`[all_zeros]`。 |
+| P1-F2（负责人选 A） | resolved（入口本身）；测试有漏洞，见 B1-R5-1 | `layout.py:464-474`：先类型检查，再 `validate_for_write()`，再用 `config.writer_lock_timeout_seconds` 调 `DataLayout.create`。`test_open_write_layout_uses_configured_timeout`（配置为 3 → layout 和 writer 都是 3）、`test_open_write_layout_runs_write_preflight_before_layout`（空间不足时 `ConfigError` 且 `DATA_ROOT` 不存在；调用顺序为 `["validate_for_write", "create"]`）都通过。`load(environ=...)` 传了 `environ` 时不读 `.env`（`loader.py:48`），测试与本机环境隔离。文档示例（README、`src/config/README.md`、`runs.py` 模块说明）都改用 `open_write_layout`。`Run.start` 的一致性检查仍在（`runs.py:121-122`）。 |
+| P1-F3（负责人选 B） | resolved（做法本身）；附带问题见 B1-R5-2 ~ B1-R5-4 | `layout.py:106-200`：先试 `LOCK_NB`；超时 0 直接报错、不起线程（`test_zero_timeout_fails_immediately_without_waiter_thread` 把 `_LockWaiter` 换成会报错的替身仍通过）；否则后台线程用自己的句柄阻塞 `flock`，主线程 `Event.wait` 计时；放弃后帮手拿到锁立刻关闭句柄（我的探测 ① ④ 和 `test_waiter_that_gave_up_releases_lock_as_soon_as_it_gets_it` 都确认）；帮手出错时原样抛出 `OSError`，由 `write_new`（`:517-518`）和 `create`（`:455-456`）统一转成 `WriteBoundaryError`（`test_waiter_lock_error_is_reported_without_writing`、句柄耗尽探测都看到 `WriteBoundaryError`）。负责人条件 1：`test_waiting_writer_gets_lock_while_another_process_writes_back_to_back` 在新写法下 30 次 + 负载 18 次 + 3.13 下 10 次全部通过，换回轮询 3/3 失败。条件 2：没有 Linux；README:58、ADR-003:29-31、`src/config/README.md:29`、CHANGELOG:16、`layout.py` 模块说明和类说明都写明“只在 macOS 验证过”。PLAN §4 B1 验收：超时 0 立即失败、超时 1 秒约 1 秒失败且数据不变、等待中释放则成功、非法值被拒绝，都有通过的测试，我的探测也看到 1.00–1.01 秒。 |
+| B1-R4-3 | out-of-scope（未变） | 3.13.18 上仍是那 2 个 PR1 用例失败，与 B1 无关。 |
+| B1-R2-1、B1-R1-1 ~ B1-R1-7 | resolved（维持） | 相关代码未变，测试在 435 个中通过。 |
+
+**硬规则 8–11 核对：** 规则 8：`open_write_layout` 只用 `validate_for_write()` 返回的、由 `DATA_ROOT` 得到的路径，写入仍走分层 writer。规则 9：入口内先 `validate_for_write()` 再 `DataLayout.create`，测试证明了顺序和“检查失败不建目录”；但直接构造 `DataLayout(...)`/`ScopedWriter(...)` 能跳过检查，见 B1-R5-1。规则 10：等锁秒数只来自配置，没有新增散落的数字。规则 11：`src/config/` 本轮只改了 `README.md` 和 `README_FOR_DEVELOPER.md` 两份文档，两份同步更新，没有改配置代码；`layout.py` 引入 `src.config.PipelineConfig`，`src/config/` 不反向引用 `data_io`，没有循环引用。
+
+### New findings
+| ID | Severity | Location | Finding | Suggested direction |
+| --- | --- | --- | --- | --- |
+| B1-R5-1 | should-fix | `tests/test_writer_recovery.py:817-837`；文档 `README.md:56`、`src/config/README_FOR_DEVELOPER.md:29`、ADR-003:28、CHANGELOG:11 | 负责人的决定是“加测试禁止 `src/` 里其他地方直接调用 `DataLayout.create(`”。现在的扫描只认“`DataLayout` 这个名字后面紧跟 `.create`”。实测：PR3 的人如果写 `from src.data_io import layout` 然后 `layout.DataLayout.create(root)`——代码里明明有 `DataLayout.create(` 这几个字——测试照样通过。另外，直接写 `DataLayout(root=root)` 或 `ScopedWriter(root=root, role=...)` 也能拿到可写的 writer，而且比绕过 `create` 更糟：既不做写前检查（硬规则 9），也不扫描遗留的半成品文件，等锁秒数还是 0。例子：下载器写成 `ScopedWriter(root=Path(os.environ["DATA_ROOT"]), role=WriterRole.COLLECTOR)`，磁盘快满也照写，锁被占立刻失败，测试全绿。文档却写“有测试拒绝直接调用”，读者会以为已经堵死了。 | (1) 扫描时把 `<任意>.DataLayout.create` 也算进去（`node.value` 是 `ast.Attribute` 且 `.attr == "DataLayout"`）；(2) 在 `layout.py` 以外，调用 `DataLayout(...)` 或 `ScopedWriter(...)` 也算违规（`layout.py` 里 `create` 的 `cls(...)` 和 `writer()` 本身除外）；(3) 把扫描逻辑抽成一个小函数，用几段写好的源码字符串（上面 5 种写法）测试它自己，证明真能抓到；(4) 文档如实写明还抓不到的情况（例如 `import DataLayout as X` 这类改名）。也可以另加一道纯文本检查 `DataLayout\s*\.\s*create\s*\(` 作为第二道网。 |
+| B1-R5-2 | should-fix | `layout.py:106-200`（`_LockWaiter`）；文档 `README.md:58`、ADR-003:29、`src/config/README.md:29` | 每次“等不到、放弃”都会留下一个后台帮手**和一个打开的文件句柄**，直到锁空出来。同一个程序如果反复重试，它们会一直累积。实测：锁一直被占，用 1 秒等待重试 10 次，帮手和句柄各涨到 10 个；把可打开文件数限制为 24 时，第 19 次重试报 `Too many open files`，而且这时同一程序里打开任何文件（包括账本、运行记录）都会失败。时间线（推断）：10:00 回填任务 A 开始 `DataLayout.create`，要扫描和重新算校验和，持锁几分钟；同一台机器上的定时任务 B 用 1 秒等待、失败后每秒重试；按 macOS 常见上限 256 个，约 4 分钟后 B 不只是拿不到锁，连写日志文件、开账本都失败。锁一空所有句柄会立刻归还，数据不会坏，但报错原因会让人误以为是别的问题。文档只写了“该线程会一直阻塞到锁空出来”，没写“每放弃一次就多一个、并占一个文件句柄”。Analyst 在 packet 中承认了这个限制，但它没有进入文档。 | 至少：README、ADR-003、`src/config/README.md` 写明“每次放弃会留下一个后台线程和一个打开的文件，直到锁空出来；不要在同一个程序里用很短的等待时间反复重试，应改用一次较长的 `writer_lock_timeout_seconds`”。更好（推荐，改动小）：同一程序对同一个锁文件最多保留一个“已放弃但仍在等”的帮手，新的等待直接接手它（用一个按路径索引的表加互斥锁），这样重试次数再多也只占一个线程和一个句柄；并加测试：重试 10 次后帮手数仍为 1。 |
+| B1-R5-3 | should-fix | `layout.py:106-200`（`_LockWaiter`） | 放弃等待后的帮手句柄一直开着；这时如果程序 fork 出子进程，子进程会带走这个句柄的副本。之后帮手拿到锁并关闭自己那一份，但子进程那份还开着，锁就一直被占，直到子进程退出。实测：放弃一次后 fork 一个睡 3 秒、从不碰锁的子进程，原占锁者放锁 0.5 秒后锁仍被占，子进程退出后才空出来。例子（推断）：PR3 的下载器在 Linux 上用 `multiprocessing` 起一个长期运行的工作进程池；某次写入等锁超时被重试逻辑接住后，程序再起进程池，于是整台机器上所有写任务都会一直“等锁超时”，而占锁的竟是一个从来不写数据的工作进程，半夜排查非常困难。旧的轮询写法只在调用者正在等或正在写的那一刻有这个风险；新写法把风险延长到“放弃之后、锁空之前”的整段时间。当前代码里没有 fork，所以现在不会发生。 | 用 `os.register_at_fork(after_in_child=...)` 在子进程里关闭所有仍存在的帮手句柄（子进程里没有帮手线程，关掉是安全的；需要一个记录存活帮手的集合），加一个用 `os.fork()` 的测试（子进程存活期间锁能被别人拿到）。如果 Analyst 认为现在不值得改代码，至少在 README 和 ADR-003 写明“写任务不要在等锁失败后 fork 子进程；用 `multiprocessing` 时请用 `spawn` 方式”。 |
+| B1-R5-4 | suggestion | `layout.py:125-130`、`:192` | 测试名说“打断不会留下锁”，大体成立，但有两个很窄的时间缝：(a) Ctrl-C 恰好落在 `_LockWaiter(path)` 返回之后、`take()` 进入 `try` 之前：没人把帮手标记为“已放弃”，帮手拿到锁后就一直拿着（实测模拟：中断后锁一直被占，同一程序下一次写失败），直到程序退出；(b) Ctrl-C 恰好落在 `self._thread.start()` 内部等待线程启动时：`except` 分支会关闭一个帮手线程可能正在用的句柄，帮手随后可能再关一次同一个号码，而这个号码可能已被别的文件（例如账本）重新使用。通常 Ctrl-C 会让程序退出，系统会收回所有句柄，所以实际影响很小。 | 把 `self._thread.start()` 挪进 `take()` 的 `try/finally` 里（或在 `_lock` 里用 `try/except BaseException` 包住“创建帮手 + take”，异常时标记放弃）；`start()` 失败时只有在线程确实没启动（`self._thread.ident is None`）时才关闭句柄。测试名或注释改成不那么绝对的说法。 |
+
+### Owner questions
+无。上面三条 should-fix 都有明确的工程做法，不涉及需要负责人取舍的设计选择；负责人已接受的“放弃后帮手会留到锁空出来”这一点不变。说明：fork 和句柄问题都是在 macOS 上实测的，Linux 未测；另外按 Linux 的实现推断，放锁时所有等待者被唤醒后要重新抢，放锁的一方紧接着再拿锁也可能抢到，所以负责人条件 2 中“合并前在 Linux 上跑一次连续写测试”仍然很有价值（文档已按条件写明只在 macOS 验证过）。
+
+### Analyst response
+| ID | Action (fixed / disputed / deferred-to-owner) | Detail and checks |
+| --- | --- | --- |
+
+- Round result: `changes requested`。B1-R4-1、B1-R4-2 已 resolved；P1-F2、P1-F3 按负责人的选择实现，负责人两个条件都满足；但 B1-R5-1、B1-R5-2、B1-R5-3 三条 should-fix 未解决，B1 尚未收敛。lint、format、全量测试（435 passed）由 Reviewer 本轮亲自在隔离的 worktree 中运行通过；新锁测试重复 30 次、加负载 18 次、3.13 下 10 次均无偶发失败。
+
+### Analyst response（Analyst 第 6 步，2026-11-19，由 Orchestrator 按 Analyst 回复填写）
+| ID | Action | Detail and checks |
+| --- | --- | --- |
+| B1-R5-1 | fixed | 扫描抽成 `_layout_bypasses(source, filename)`：`src/` 中除类型标注、`isinstance`/`issubclass` 的类参数、普通导入外，任何对 `DataLayout`/`ScopedWriter` 的名字或属性引用都算违规（改名导入也算）；只允许 `layout.py` 的 `open_write_layout` 和 `DataLayout.writer`，并断言这两处存在。新测试覆盖 11 种绕过写法（含 Reviewer 的 5 种）、合法写法不误报、报告位置正确。抓不到的写法（`type(layout)(...)`、`__class__`、`dataclasses.replace`、运行时字符串查找、`src/` 以外）写进 README、ADR-003、CHANGELOG、两份 config README、`open_write_layout` 说明。 |
+| B1-R5-2 | fixed | `layout.py` 新增按锁文件 `(st_dev, st_ino)` 记录的空闲等待者表；新的等待优先接手“已放弃但仍在等”的帮手；单线程重试最多 1 个帮手和 1 个句柄。3 个新测试；关掉接手后其中 2 个失败。探测：`ulimit -n 24`、1 秒等待重试 30 次，始终 1 个帮手、多占 1 个文件，放锁后归还并写入成功。多线程同时等待时各留一个，已写进文档。 |
+| B1-R5-3 | fixed | `os.register_at_fork`：fork 前拿住表锁，子进程中关闭所有帮手句柄并清空表。新测试 `test_forked_child_does_not_keep_an_abandoned_waiter_lock`（无 fork 时跳过）；去掉登记后测试失败。持锁写文件期间 fork 仍会继承锁（与改动前相同），已写进 README、ADR-003。 |
+| B1-R5-4 | fixed（采纳 suggestion） | 选帮手、`thread.start()`、等待都放进 `_wait_for_lock` 的 `try/finally`；被打断时未拿到锁的帮手放回空闲表、已拿到的句柄关闭；`start()` 失败时只关闭句柄。2 个新测试；把 `start()` 挪回 `try` 外后测试失败。剩余字节码级空隙写在文档字符串中（不会占着锁）。 |
+
+Analyst 检查：ruff、format 通过；全量 466 passed（含 B2 未提交测试）；锁相关测试连跑 30 次、负载下 18 次、Python 3.13 上 10 次全部通过（3.13 全量仍有已知的 B1-R4-3 两个失败）。只在 macOS 运行。
+
+## Block B1 · Round 6 · 2026-11-19
+
+**结论先说：** 上一轮的三条 should-fix 和一条 suggestion 都按要求做了，我用自己的探测逐条确认：(1) 源码扫描现在能抓住所有“写出了类名”的绕过写法；(2) 同一线程反复放弃等待，始终只多 1 个后台帮手、1 个打开的文件；(3) 放弃等待后 fork，子进程不再占着锁（关掉新加的 fork 钩子，问题立刻重现）；(4) 两个被点名的打断时间缝已堵上。lint、format、全量测试（466 passed）都通过。**但新加的“帮手复用”引入了一个真正的锁错误（B1-R6-1，must-fix）**：同一个程序里有两个线程在等同一把锁时，先放弃的那个线程可能误以为自己拿到了锁，于是两个线程同时在写。另有一条 suggestion（B1-R6-2）。本轮结果：`changes requested`。
+
+先解释几个词：
+- **线程**：同一个程序里同时干活的几个“帮手”。本轮的问题只在“一个程序里有几个线程同时等锁”时出现；只有一个线程的程序不受影响。
+- **模块互斥锁 `_WAITERS_MUTEX`**：程序内部的一把小锁，保证“空闲帮手表”同一时间只被一个线程修改。
+- **复用（reuse）**：上一次等锁放弃后，后台帮手还在排队；下一次等锁直接接手这个帮手，而不是再开一个。
+
+- Revision: `codex/pr2-run-ledger` @ `4cd778e` + `<scratchpad>/all.patch`（B1 + B2 未提交改动）。按隔离要求在 `<scratchpad>/wt-b1r6`（`git worktree add --detach … HEAD` 后 `git apply all.patch`）中审查；`git status --short` 显示 13 个修改文件、没有未跟踪文件。逐个 `cmp` 与主工作区对比，13 个文件完全一致，packet 与磁盘相符。为了只看本轮变化，另建 `<scratchpad>/wt-r5base`（HEAD + `b1-round5.patch`）做对比：本轮 B1 改动集中在 `src/data_io/layout.py`（帮手表、`_wait_for_lock`、fork 钩子）、`tests/test_writer_recovery.py`（扫描函数和 10 个左右新测试）以及 README、CHANGELOG、ADR-003、两份 `src/config` README 的相关段落；`src/data_io/runs.py` 与第 5 轮相同。B2 的改动不在本轮审查范围，只确认整体测试通过。
+- Addresses: B1-R5-1、B1-R5-2、B1-R5-3、B1-R5-4（suggestion，Analyst 采纳）。
+- Checks run by Reviewer（worktree 中，macOS，CPython 3.9.6，除非另注）：
+  - `uv run ruff check .` → All checks passed!
+  - `uv run ruff format --check .` → 30 files already formatted
+  - `uv run pytest tests/ -v -p no:cacheprovider` → **466 passed** in 12.40s（含 B2 已收敛的测试）。
+  - 锁相关测试重复跑：`.venv/bin/python -m pytest tests/test_writer_recovery.py -q -p no:cacheprovider -k "waiter or zero_timeout or successful_wait or interrupt or back_to_back or open_write_layout or lock or fork or layout_bypass or reuse or bounded"` 连续 30 次 → 30/30 通过（每次 47 passed, 39 deselected）。
+  - 加负载：24 个 `yes > /dev/null` 占满 12 核，同时 6 个上面的 pytest 并行，共 3 轮（`<scratchpad>/probe-b1r6/load.sh`）→ 18/18 退出码 0，每次 47 passed（9.3–9.5 秒）；其中一次有 pytest 自己清理临时目录时的 `PytestWarning`（并行运行互相删目录），与本项目代码无关。
+  - **Python 3.13.18**（临时环境 `uv venv --python 3.13` + `uv pip install --offline pydantic python-dotenv pytest duckdb pyarrow`，结束后已删除）：全量 `python -m pytest tests/ -q -p no:cacheprovider` → 2 failed, 464 passed，失败的仍只是已知的 B1-R4-3（PR1 的 `test_excessively_nested_source_json_retains_evidence`）；锁测试连跑 10 次 → 10/10 通过。
+  - **多线程竞争探测**（见 B1-R6-1）：`race.py` 强制制造先后顺序 → 3/3 次出现“线程 1 报告拿到锁但手里没有句柄、锁其实在线程 2 手里”；`stress.py`（不改任何代码，8 个线程用 0.5 毫秒超时反复等锁，另一个进程不停拿锁放锁，各 10 秒）在 `sys.setswitchinterval(1e-6)` 下 3 次分别出现 5、11、13 次“两个线程同时在临界区”；默认切换间隔（5 毫秒）下 3×10 秒没有出现。
+  - **扫描绕过探测**：在 worktree 的 `src/` 临时放 `_probe_bypass.py`，逐个换 13 种写法跑 `-k only_open_write_layout`：`DataLayout.create(root)`、`layout.DataLayout.create(root)`、`from … import *` 后调用、`class Mine(DataLayout)`、`typing.Optional[L.DataLayout]` → 都被抓到（最后一种是误报，但会大声失败，无害）；`getattr(layout, "Data"+"Layout")`、`layout.__dict__["DataLayout"]`、`dataclasses.replace(lay, …)`、`type(lay)(…)`、`lay.__class__.create(…)`、`type(w)(…)` → 没抓到，正是文档列出的“抓不到”的写法；另外 `def f(a: DataLayout.create(root))` 这种把调用写进类型标注的怪写法没抓到（标注被整体跳过），不现实，不算发现。之后删除该文件，`git status` 确认已删。
+  - **反复放弃 + 低句柄上限**（`emfile.py`，`ulimit -n 24`）：锁一直被另一个句柄占着，1 秒等待重试 30 次 → 第 1、10、30 次时都是 1 个帮手、多占 1 个文件、`_WAITER_HANDLES` 里 1 个；没有出现 “Too many open files”；放锁后帮手退出、句柄归还、表清空、再写成功。
+  - **fork 探测**（`fork2.py`，锁由一个独立进程占着）：放弃等待后 `os.fork()` 一个睡 3 秒的子进程 → 放锁 0.5 秒后锁是空的；用 `multiprocessing` 的 `fork` 方式起子进程 → 同样是空的；对照组（fork 前临时清空 `_WAITER_HANDLES`，模拟没有钩子）→ 锁仍被子进程占着，说明是钩子在起作用。`fork.py` 第 3 段：4 个线程不停等锁、另一个线程不停拿锁放锁，主线程 5 秒内 fork 5253 次，子进程都能在 1 秒内拿到模块互斥锁且表为空，没有死锁，结束后无残留。
+  - **锁文件被替换**（`replace.py`）：帮手在旧锁文件上排队时删除 `.writer.lock`，之后的写在新文件上 0.008 秒成功；新旧文件的空闲帮手分别按 inode 记录、互不复用；两边放锁后表清空、无残留线程。
+  - **真实信号打断探测**（见 B1-R6-2）：`intr2.py`/`intr5.py` 用 `SIGALRM` 在随机时刻（20 微秒–4 毫秒）抛 `KeyboardInterrupt`，循环 `with _lock(root, 1)` 约 6–8 秒，另一个进程用非阻塞方式不停拿锁放锁。本轮代码 3.9 上共 17 次：13 次结束时锁仍被本进程占着，1 次正常，2 次卡死（其中 1 次用 `faulthandler` 抓到栈：主线程永久卡在 `layout.py:225` 的 `with _WAITERS_MUTEX`，另一次只看到主线程在等一把 Python 锁），1 次没有打印结果（原因未查）；3.13 上 12 次：5 次锁被占着，2 次正常，5 次没有打印结果（原因未查，看门狗未触发，所以不是卡死）。HEAD（旧的轮询写法）3.9 上 11 次中 1 次锁被占着，没有卡死。各版本都会漏掉几十个“没拿锁”的句柄。定位到的打断点都在 `_lock` 的 `finally`（`for handle in (fd, *waited)`、`if handle is not None`、`os.close(handle)` 这几行）。
+  - **硬规则 8–11 与文档对照**：见下方。
+  - 结束后删除 `wt-b1r6`、`wt-r5base`、`wt-head` 三个 worktree 和 3.13 临时环境，`git worktree list` 只剩主工作区。
+
+### Previous findings
+| ID | Status | Evidence |
+| --- | --- | --- |
+| B1-R5-1 | resolved | `tests/test_writer_recovery.py:1055` 的 `_layout_bypasses` 把除类型标注、`isinstance`/`issubclass` 类参数、普通导入外的所有 `DataLayout`/`ScopedWriter` 名字或属性引用都算违规，改名导入也算；`:1161` 的测试只允许 `layout.py` 的 `open_write_layout` 和 `writer` 两处，并断言这两处确实存在（允许清单不会悄悄失效）。11 种写法的参数化测试、合法写法不误报、报告位置正确都通过。我的 13 种写法探测：所有写出类名的都被抓到；抓不到的 6 种正是 README:56、ADR-003、CHANGELOG、两份 config README 列出的那几类（`type(...)`、`__class__`、`dataclasses.replace`、运行时字符串查找）。文档描述与代码一致。 |
+| B1-R5-2 | resolved（单线程）；复用本身带来新问题，见 B1-R6-1 | 低句柄上限下重试 30 次始终 1 个帮手、1 个多占的文件；`test_repeated_abandoned_waits_reuse_one_waiter_and_handle`、`test_waiters_are_bounded_by_waits_in_progress_at_the_same_time` 通过。文档（README:58、ADR-003、CHANGELOG、`src/config/README.md`）写明“单线程反复重试最多多一个；几个线程同时等时各留一个”，与实测一致。 |
+| B1-R5-3 | resolved | `layout.py:252` 用 `os.register_at_fork`：fork 前拿住模块互斥锁，子进程里关闭 `_WAITER_HANDLES` 中所有句柄并清空表。我的 `os.fork` 和 `multiprocessing`（fork 方式）探测都确认子进程不再占锁；去掉钩子的对照组重现原问题。fork 与等锁同时大量发生（5253 次）也没有死锁。`test_forked_child_does_not_keep_an_abandoned_waiter_lock` 通过。“持锁写文件期间 fork，子进程仍会继承锁”已写进 README、ADR-003，表述准确。 |
+| B1-R5-4（suggestion） | resolved（两处点名的时间缝） | 选帮手、`thread.start()`、等待都进了 `_wait_for_lock` 的 `try/finally`；`start()` 里被 Ctrl-C 打断时帮手作为“未认领”放回表中（`test_interrupt_right_after_waiter_starts_does_not_leave_the_lock_held`），`start()` 真失败时只关句柄（`test_waiter_thread_that_cannot_start_closes_its_handle`）。更一般的“任意时刻被信号打断”见 B1-R6-2。 |
+| P1-F2、P1-F3（负责人选 A、B） | 维持 resolved | 入口与“等通知”的做法没有变；负责人条件 1 的测试（连续写时另一任务能拿到锁）在 30 次重复、18 次负载、3.13 下 10 次中全部通过。条件 2：仍未在 Linux 上运行，文档照旧写明“只在 macOS 验证过”。 |
+| B1-R4-3 | out-of-scope（未变） | 3.13.18 上仍是那 2 个 PR1 用例失败。 |
+| B1-R4-1、B1-R4-2、B1-R2-1、B1-R1-1 ~ B1-R1-7 | resolved（维持） | 相关代码未变，测试在 466 个中通过。 |
+
+**硬规则 8–11 核对：** 规则 8：本轮没有新增数据路径；锁文件仍是 `DATA_ROOT/.writer.lock`。规则 9：`open_write_layout` 仍先 `validate_for_write()` 再建目录；扫描现在也拦住了直接构造 `DataLayout(...)`/`ScopedWriter(...)` 这种跳过写前检查的写法。规则 10：没有新增可调参数或散落的数字。规则 11：`src/config/` 本轮只改了 `README.md` 和 `README_FOR_DEVELOPER.md`，两份同步，没有改配置代码。
+
+### New findings
+| ID | Severity | Location | Finding | Suggested direction |
+| --- | --- | --- | --- | --- |
+| B1-R6-1 | must-fix | `src/data_io/layout.py:224-236`（`_wait_for_lock` 的 `finally` 和最后两行） | **复用帮手后，先放弃的线程可能误以为自己拿到了锁。** `finally` 在模块互斥锁里把没拿到锁的帮手放回空闲表（`:233`），然后**在互斥锁外面**读 `waiter.error`、`waiter.acquired`（`:234-236`）。帮手一放回表，别的线程就可以接手它；如果这时锁正好空出来，帮手把锁交给新线程并把 `acquired` 设为 `True`，旧线程随后读到 `True`，就返回“拿到了”，但它的 `held` 是空的——它手里根本没有锁。`_lock` 于是放行，两个线程同时进入“持锁”区。时间线：10:00:00.000 线程 A 等锁 1 秒到点，把帮手放回表；10:00:00.000（同一瞬间）线程 B 开始等锁，接手这个帮手；另一个进程刚好放锁，帮手拿到锁交给 B；A 接着读 `acquired`，读到 `True`，以为自己也拿到了；A、B 同时写文件或同时做半成品恢复（恢复会把“看起来被放弃”的 partial 挪到 `recovery/`，可能挪走对方正在写的文件）。实测：强制这个先后顺序 3/3 次重现（A 返回 `(True, [])`，B 返回 `(True, [5])`）；不改代码的压力测试在线程切换间隔调到 1 微秒时 30 秒内出现 29 次“两个线程同时在临界区”；默认切换间隔下 30 秒内没出现，所以很少见，但一旦发生就是锁失效、数据可能被弄乱，而且 README:58 专门描述了“同一程序里几个线程同时等锁”的情况，说明这是预期会出现的用法。同理，A 也可能抛出本该属于 B 的错误。现有测试没有覆盖这个顺序。 | 在 `finally` 的 `with _WAITERS_MUTEX:` 里就把结果定下来：拿到锁时记 `got = True`（并 `held.append`）；帮手已结束且带错误时，在同一个块里把 `waiter.error` 存进局部变量；帮手要放回表时，结果就是“没拿到、没有错误”。放回表之后不再读这个帮手的任何字段；或者直接用“`held` 有没有新加句柄”作为返回值。加一个确定性的测试：让线程 A 放回帮手后暂停，线程 B 接手并拿到锁，再让 A 继续，断言 A 返回 `False` 且 `held` 为空、B 拿到句柄（可以像我的 `race.py` 那样替换互斥锁对象，在 A 的最后一次释放后等一个 `Event`）。 |
+| B1-R6-2 | suggestion | `src/data_io/layout.py:280-285`（`_lock` 的 `finally`）、`:156`/`:225`（`with _WAITERS_MUTEX`）、`:186-193`（文档字符串） | **被信号打断后继续运行的程序，可能留下一把一直被占的锁，或（3.9 上）卡死。** Python 的 Ctrl-C（`KeyboardInterrupt`）或会抛异常的信号处理函数可以在任意两条字节码之间生效。如果它恰好落在 `_lock` 的 `finally` 里“关句柄之前”，持锁的句柄就漏掉了，锁一直被占到程序退出；如果在 3.9 上落在 `with _WAITERS_MUTEX` 退出的空隙（CPython 3.9 已知的 `with` 退出不原子问题），模块互斥锁就永远不释放，之后本程序所有线程等锁都会永久卡住、无视等待秒数，fork 也会卡住（fork 钩子要先拿这把锁）。这类问题旧代码也有（HEAD 在同样的探测下 11 次中 1 次锁被占），本轮代码更容易碰到（3.9 上 17 次中 13 次被占、2 次卡死；3.13 上 12 次中 5 次被占，另有 5 次没有打印结果），因为释放路径更长、互斥锁是全进程共享的。本项目里确实有“打断后继续跑”的路径：`Run.__exit__` 收到 `KeyboardInterrupt` 后会调用 `finish("failed")`，它要通过 REGISTRY writer 写 `record.json`，需要再拿一次写锁。正常的 Ctrl-C 会让程序退出、系统收回所有锁，所以实际影响很小；文档字符串说剩下的空隙“都不会占着锁”，只对它点名的那一处成立。 | 可选：(1) 在 `_wait_for_lock` 里用 `_WAITERS_MUTEX.acquire(timeout=剩余秒数)` 代替无限等待，等不到就按超时报 `WriteBoundaryError`，至少不会无视等待秒数永久卡住；(2) 把 `_lock` 的 `finally` 缩短（只关一个句柄）；(3) 在 README/ADR-003 写一句“被信号处理函数打断后继续运行的程序，写锁可能一直被占到程序退出；Ctrl-C 后请让程序退出”，并把文档字符串的说法改得不那么绝对。完全消除需要在关键段屏蔽信号（`signal.pthread_sigmask`），复杂度较高，不建议本 PR 做。 |
+
+### Owner questions
+无。B1-R6-1 有明确的工程修法，不涉及负责人取舍；B1-R6-2 是可选改进。说明：多线程竞争和信号打断都只在 macOS 上实测；负责人条件 2（合并前在 Linux 上跑一次连续写测试）仍未满足，文档已按条件写明只在 macOS 验证过。
+
+### Analyst response
+| ID | Action (fixed / disputed / deferred-to-owner) | Detail and checks |
+| --- | --- | --- |
+
+- Round result: `changes requested`。B1-R5-1、B1-R5-2、B1-R5-3、B1-R5-4 已 resolved；新的 must-fix B1-R6-1（复用帮手后先放弃的线程可能误判自己拿到锁）未解决，B1 尚未收敛。lint、format、全量测试（466 passed）由 Reviewer 本轮在隔离的 worktree 中亲自运行通过；锁测试重复 30 次、负载下 18 次、3.13 下 10 次均通过。
+
+### Analyst response（Analyst 第 7 步，2026-11-19，由 Orchestrator 按 Analyst 回复填写）
+| ID | Action | Detail and checks |
+| --- | --- | --- |
+| B1-R6-1 | fixed | `layout.py`：每次等待带自己的句柄清单（`claim`）；帮手在内部小锁里把拿到的句柄直接放进当前认领者的清单，无人认领则立即关闭；`_wait_for_lock` 在内部小锁里定下结果，交回帮手后不再读它。新测试 `test_wait_that_hands_back_its_waiter_never_takes_the_lock_meant_for_the_next_wait`（在第 6 轮代码上 3/3 失败）。Reviewer 的 `race.py`（3.9、3.13 各 3 次）与 `stress.py`（切换间隔 `1e-6`、`0.005`，3.9、3.13 各 3×10 秒）同时持锁 0 次。 |
+| B1-R6-2 | fixed（部分采纳） | 放锁改为先 `LOCK_UN` 再关闭（嵌套 `finally`），且只有拿锁的 pid 才 `LOCK_UN`；内部小锁改为 `RLock`（子进程中重建）；`Event.set` 移到锁外；线程未启动就被打断时关闭句柄。`acquire(timeout=...)` 实测更差，未采用。3 个新测试，均做了反向验证。随机 Ctrl-C 探测每版 10 次：新代码锁被占 0 次（3.9、3.13），第 6 轮代码 8 次 / 7 次，HEAD 0 次；新代码无卡死。剩余限制写进 README、ADR-003、CHANGELOG、`_lock` 说明。 |
+
+Analyst 检查：ruff、format 通过；全量 470 passed（3.9，含 B2）；锁测试连跑 30 次、负载下 18 次通过；3.13 全量 468 passed、2 failed（已知 B1-R4-3），锁测试 10/10。改动文件：`src/data_io/layout.py`、`tests/test_writer_recovery.py`、`README.md`、`CHANGELOG.md`、ADR-003。只在 macOS 运行。
+
+## Block B1 · Round 7 · 2026-11-19
+
+**结论先说：** 第 6 轮的 must-fix B1-R6-1（复用帮手后，先放弃的线程误以为自己拿到锁）已经从结构上修好：拿到的锁只会交给“当时正在认领这个帮手的那次等待”，我用自己的竞争和压力探测都没再看到两个线程同时持锁（同一探测在第 6 轮代码上 10 秒内就出现 7–9 次）。B1-R6-2 的几处改动（先 `LOCK_UN` 再关闭、只有拿锁的进程才解锁、`RLock`、`Event.set` 移到锁外、未启动就关闭句柄）本身也都按说明工作。lint、format、全量测试（470 passed）都通过。**但我发现一个第 6 轮就已存在、上一轮我没发现的问题（B1-R7-1，must-fix）**：如果 Ctrl-C（或会抛异常的信号处理函数）恰好落在“启动后台帮手线程”这一步，代码会误以为线程没启动，于是去关闭一个后台线程正在使用的文件；在 macOS 上这一关会卡住，同时占着内部小锁，几个线程同时等锁时整个程序永久卡死，而且全机的写锁一直被占着。另外，锁相关代码已经从改动前的约 30 行长到约 230 行，远超负责人选 B 时被告知的“约 30–40 行”，我作为 non-blocking 问题提给负责人。本轮结果：`changes requested`。
+
+先解释几个词：
+- **后台帮手（线程）**：同一个程序里替调用者“排队等钥匙（写锁）”的帮手。程序里每个线程都可以有自己的帮手。
+- **句柄**：程序打开一个文件时操作系统发的“号码牌”。号码牌关掉之后，这个号码可能马上发给下一个打开的文件。
+- **内部小锁 `_WAITERS_MUTEX`**：程序内部的一把小锁，保证“帮手表”同一时间只被一个线程修改。
+- **信号处理函数抛异常**：Ctrl-C 在 Python 里变成 `KeyboardInterrupt`；有些程序还会用定时信号（`signal.alarm`）给任务限时，到时抛 `TimeoutError` 之类的普通异常。这类异常可以在任意两条 Python 指令之间冒出来。
+
+- Revision: `codex/pr2-run-ledger` @ `4cd778e` + `<scratchpad>/all.patch`（B1 + 已收敛的 B2）。按隔离要求在 `<scratchpad>/wt-b1r7`（`git worktree add --detach … HEAD` 后 `git apply all.patch`）审查；`git status --short` 显示 13 个修改文件、没有未跟踪文件；逐个 `cmp` 与主工作区一致。另建 `<scratchpad>/wt-r6`（HEAD + `all-round6.patch`），`diff -rq` 显示本轮只改了 `src/data_io/layout.py`、`tests/test_writer_recovery.py`、`README.md`、`CHANGELOG.md`、ADR-003，与 packet 一致。B2 内容不在本轮审查范围，只确认整体测试通过。
+- Addresses: B1-R6-1（must-fix）、B1-R6-2（suggestion，Analyst 部分采纳）；同时按要求检查本轮改动是否带来新问题和复杂度。
+- Checks run by Reviewer（worktree 中，macOS，CPython 3.9.6，除非另注）：
+  - `uv run ruff check .` → All checks passed!
+  - `uv run ruff format --check .` → 30 files already formatted
+  - `uv run pytest tests/ -v -p no:cacheprovider` → **470 passed** in 13.07s
+  - 锁测试重复跑：`.venv/bin/python -m pytest tests/test_writer_recovery.py -q -p no:cacheprovider -k "waiter or zero_timeout or successful_wait or interrupt or back_to_back or open_write_layout or lock or fork or layout_bypass or reuse or bounded or hands_back or release"` 连续 30 次 → 30/30 通过（每次 51 passed, 39 deselected）。
+  - 加负载（`<scratchpad>/probe-b1r7/load.sh`）：24 个 `yes > /dev/null` 占满 12 核，同时 6 个上面的 pytest 并行，共 3 轮 → 18/18 都是 51 passed（9.1–9.9 秒）；其中一次有 pytest 自己清理临时目录的 `PytestWarning`（并行运行互删目录），与项目代码无关。
+  - **Python 3.13.18**（临时环境 `uv venv --python 3.13` + `uv pip install --offline pydantic python-dotenv pytest duckdb pyarrow`，结束后已删除）：全量 `python -m pytest tests/ -q -p no:cacheprovider` → 2 failed, 468 passed，失败的仍只是已知的 B1-R4-3；锁测试连跑 10 次 → 10/10 通过。
+  - **B1-R6-1 竞争探测**：第 6 轮的 `probe-b1r6/race.py`（强制“A 交回帮手后暂停、B 接手并拿到锁、A 再继续”的顺序）3.9、3.13 各 3 次 → 每次 A 返回 `(False, [])`，B 返回 `(True, [句柄])`。
+  - **B1-R6-1 压力探测**（新写的 `probe-b1r7/stress7.py`，不改任何代码：8 个线程用 0.5 毫秒超时反复等锁、迫使帮手不断交回和复用，另一个进程不停拿锁放锁，每次 10 秒；在“拿到”的区段里用内核核对：返回的句柄是否真的持有锁、另开一个句柄能否抢到锁、是否有两个线程同时在区段内）：3.9 下切换间隔 `1e-6` 和 `0.005` 各 3 次、3.13 下各 2 次 → 等待模式共约 18 万次“拿到”，**两个线程同时持锁 0 次、拿到却没有句柄 0 次、句柄不持锁 0 次、别人能抢到 0 次**，结束时锁空、帮手表和句柄表为空。用真实入口 `_lock(root, 1)` 跑（3.9 两次、3.13 一次）→ 同样 0 次。对照：同一探测在第 6 轮代码上 2 次各 10 秒 → 出现 7 次和 9 次“拿到却没有句柄、两线程同时持锁”，说明探测能抓到原问题。
+  - **flock 语义与 fork 持锁**（`probe-b1r7/flocksem.py`，3.9 和 3.13 结果相同）：①同一进程另开一个句柄执行 `LOCK_UN`，原持有者的锁**仍在**；对持有者的 `dup` 副本执行 `LOCK_UN`，锁**被放掉**（这正是 fork 子进程那份副本的情况，所以 pid 检查是必要的）。②外层 `_lock` 持锁时，同线程嵌套 `_lock(root, 0)` 失败、嵌套 `_lock(root, 1)` 1.01 秒后失败、另一线程 `_lock(root, 1)` 失败，三次之后外层的锁都仍被持有；外层退出后锁空、无残留帮手。③持锁时 fork 出的子进程退出同一个 `with`，父进程的锁仍在；父进程退出后锁空。④持锁时 fork，然后用 `SIGKILL` 杀掉父进程：子进程活着期间锁仍被占，子进程退出后锁空，与 ADR-003 的描述一致。
+  - **自己的改动测试（mutation）**（`probe-b1r7/mut7.py`，在单独的 `wt-mut` 中逐个改坏 `layout.py` 后跑锁测试）：“交回后再读帮手状态”（第 6 轮写法）、去掉 pid 检查、去掉 `LOCK_UN`、`RLock` 换回 `Lock`、无人认领时也把句柄交出去、交回时不清除认领、子进程不关继承的句柄、去掉“未启动就关闭”——8 种都有测试失败；只有“把 `Event.set` 挪回小锁里面”没有测试失败（见 B1-R7-3）。之后 `layout.py` 已恢复，`cmp` 与 `wt-b1r7` 一致。
+  - **Analyst 修改后的中断探测是否漏掉情况**：`b1r7/intr6.py` 比我第 6 轮的 `intr5.py` 多了一个 `ARMED` 开关：信号处理函数只在 `ARMED` 为真时抛 `KeyboardInterrupt`，而 `ARMED` 只在 `setitimer(0)` 之后、也就是 `with _lock(...)` 已经完全退出之后才变假，下一次进入 `_lock` 之前又变真。所以它**不会**漏掉任何落在 `_lock` 内部的打断，只是丢掉“迟到”的信号。我确认了迟到信号确实存在：不带开关的 `intr5.py` 在本轮代码上 3.9 跑 10 次，有 3 次探测脚本自己在循环开头（`while time.time() < end:`，不在任何 `try` 里）收到 `KeyboardInterrupt` 而退出——这就是我第 6 轮记录的“没有打印结果”的原因，是探测脚本的问题，不是项目代码的问题。结论：这个修改合理。结果：`intr5.py` 3.9 上能跑完的 7 次锁都空；`intr6.py` 3.9 上 10/10、3.13 上 10/10 锁都空，没有卡死。
+  - **多线程 + 随机中断探测**（新写的 `probe-b1r7/intr7mt2.py`/`intr7mt3.py`：主线程像 `intr6.py` 一样被随机打断，同时 3 个后台线程不停 `_lock(root, 1)`；用“主线程当前是否正停在持锁区段那一行”来判断主线程是否认为自己持锁，避免标记被打断后残留造成的误报）：3.13 共 30 次、3.9 共 55 次（每次 7 秒，约 1900 次打断）→ **两个线程同时持锁 0 次**；但有 5 次整个程序卡死被看门狗结束（3.13 两次，3.9 三次），栈全都一样，见 B1-R7-1；另有 1 次（3.9）主线程跑完但 3 个后台线程卡住、锁被占，当时没有抓到栈，原因未查明（可能是文档已写明的 3.9 小锁漏放问题，也可能是 B1-R7-1，未验证）。我最早一版多线程探测（`intr7mt.py`）报告过若干“重叠”，查明是探测里主线程的标记被打断后没清掉造成的误报，改进后的版本为 0。
+  - **B1-R7-1 的确定性复现**（`probe-b1r7/startexc.py`、`startexc2.py`，3.9 和 3.13 都做）：见下方 B1-R7-1。
+  - **硬规则 8–11 与文档对照**：见下方。
+  - 结束后删除 `wt-b1r7`、`wt-r6`、`wt-mut` 三个 worktree 和 3.13 临时环境，`git worktree list` 只剩主工作区。探测脚本留在 `<scratchpad>/probe-b1r7/`，供 Analyst 复现 B1-R7-1。
+
+### Previous findings
+| ID | Status | Evidence |
+| --- | --- | --- |
+| B1-R6-1 | resolved | 从结构上看：`layout.py:241` 认领者在小锁里设 `waiter.claim = held`；`:269` 交回时在小锁里设回 `None`；帮手线程在 `:161-171` 的同一把小锁里读 `claim` 并把句柄直接 `append` 进认领者的清单，没人认领就立即关闭；`_wait_for_lock` 在 `:257-270` 的小锁里根据 `waiter.done` 定下结果，之后只读局部变量 `obtained`/`error`，不再碰帮手。所以“句柄交给谁”和“谁在认领”是在同一把锁里决定的，交回之后旧的等待不可能再收到句柄。实测：`race.py` 6/6 次 A 返回 `(False, [])`；`stress7.py` 等待模式约 18 万次拿锁 0 次重叠（第 6 轮代码 10 秒内 7–9 次）；新测试 `test_wait_that_hands_back_its_waiter_never_takes_the_lock_meant_for_the_next_wait` 在“交回后再读帮手状态”的改法下失败。 |
+| B1-R6-2（suggestion） | resolved（采纳部分的改动本身正确）；同一段代码里另有问题，见 B1-R7-1 | 先 `LOCK_UN` 再关闭（`:331-337`，嵌套 `finally`）：`test_release_still_frees_the_lock_when_interrupted_once` 通过，去掉 `LOCK_UN` 后失败。只有拿锁的进程解锁（`:317`、`:332`）：flock 按“打开的文件”计（不是按号码牌、也不是按进程），我的探测①证明另开的句柄 `LOCK_UN` 不会放掉别人的锁，而 fork 子进程那份是同一个“打开的文件”的副本，`LOCK_UN` 会放掉父进程的锁，所以 pid 检查是必要的；去掉检查后 `test_fork_while_holding_the_lock` 失败。pid 被重复使用：子进程是在父进程还活着时创建的，不可能和父进程同号；只有父进程死后再由子进程 fork 出的孙进程才可能拿到同号，这时它最多是提前放掉一把已经没有合法持有者的锁，可以忽略。`RLock`：代码里四处 `with _WAITERS_MUTEX`（`:161`、`:236`、`:248`、`:257`）都没有嵌套，锁内调用的 `_take_idle_waiter`、`_forget_idle`、`_LockWaiter.__init__`、`_open_lock_file` 也不再拿这把锁，所以正常运行时 `RLock` 与 `Lock` 行为相同，不会掩盖问题；只有“同一线程漏放之后再进来”时才不同，换回 `Lock` 后 `test_wait_interrupted_before_releasing_the_waiter_mutex_does_not_deadlock` 失败。子进程里重建小锁（`:276-284`）：fork 测试通过，fork 钩子用 `lambda` 在调用时取全局名，重建后不会引用旧锁。`Event.set` 移到锁外（`:173`）：结果只看 `waiter.done`（锁内设置），不依赖 `Event`，所以正确；但没有测试守住它（B1-R7-3）。未启动就关闭句柄（`:263-267`）：去掉后测试失败。文档：README:58、ADR-003:30、CHANGELOG:17、`_lock` 和 `_wait_for_lock` 文档字符串中“持锁时 fork 的子进程只共享到父进程写完为止”“父进程被杀时子进程那份仍占着锁”都与我的探测③④一致。 |
+| P1-F2、P1-F3（负责人选 A、B） | 维持 resolved | 入口与“等通知”的做法没变；负责人条件 1 的测试在 30 次重复、18 次负载、3.13 下 10 次中全部通过。条件 2：仍没有在 Linux 上运行，文档照旧写明“只在 macOS 验证过”。 |
+| B1-R4-3 | out-of-scope（未变） | 3.13.18 上仍是那 2 个 PR1 用例失败。 |
+| B1-R5-1 ~ B1-R5-4、B1-R4-1、B1-R4-2、B1-R2-1、B1-R1-1 ~ B1-R1-7 | resolved（维持） | 相关代码未变或已在上面复核，测试在 470 个中通过。 |
+
+**硬规则 8–11 核对：** 规则 8：本轮没有新增数据路径；锁文件仍是 `DATA_ROOT/.writer.lock`。规则 9：`open_write_layout` 没有变，仍先 `validate_for_write()` 再建目录。规则 10：没有新增可调参数或散落的数字。规则 11：本轮没有改 `src/config/` 的任何文件（`diff -rq` 确认），`src/config/README.md` 中关于等锁的描述仍然准确。
+
+### New findings
+| ID | Severity | Location | Finding | Suggested direction |
+| --- | --- | --- | --- | --- |
+| B1-R7-1 | must-fix | `src/data_io/layout.py:242-253`（`_wait_for_lock` 中 `waiter.thread.start()` 的 `except Exception:` 分支）；相关说法：该处注释、`_wait_for_lock` 文档字符串、README:58“After Ctrl-C, let the program exit; the operating system then releases the lock”、ADR-003:30 | **代码把“`start()` 抛了普通异常”当成“线程没有启动”，然后关闭后台线程正在使用的句柄。** 实测这个前提是错的：CPython 的 `Thread.start()` 是“先真正创建线程，再等它报到”；如果信号处理函数在“等报到”时抛异常，`start()` 会在线程**已经在跑**之后抛出——Ctrl-C 时有一部分会变成 `RuntimeError: release unlocked lock`（3.9 上被打断的 2550 次中 47 次，3.13 上 2485 次中 12 次，都是“线程已经跑起来了”）；如果程序用定时信号抛普通异常（例如 `TimeoutError`），1369 次中有 1117 次是“线程已经跑起来了”。这些都落进 `except Exception:`，代码在**持有内部小锁**的情况下 `os.close(waiter.fd)`，而后台线程正阻塞在同一个句柄的 `flock` 上。后果（都实测过）：(1) **macOS 上这次关闭会一直卡到 `flock` 返回**。只有一个线程在等时，被打断的这次等待会无视等待秒数，一直卡到别的进程放锁（等待秒数 1，实际卡了 2.51 秒，正好等于另一个进程持锁的时间）；几个线程同时等时会形成**永久死锁**：主线程拿着内部小锁卡在关闭上，它要等帮手 W1 的 `flock` 返回；W1 在等写锁；写锁已被另一个帮手 W2 拿到，W2 又在等主线程手里的内部小锁。整个程序卡死，而且全机的 `.writer.lock` 一直被占，其他任务全部等锁超时，直到有人手动杀掉这个进程。多线程随机中断探测 85 次中 5 次正是这个栈（主线程停在 `layout.py:252`），确定性复现在 3.9、3.13 上都是 8 秒看门狗超时。(2) **同一个号码牌被关两次**：卡住结束后，后台线程在 `:169` 又关一次同一个号码，实测得到 `OSError: [Errno 9] Bad file descriptor`；如果这期间号码已经发给了别的文件（例如账本 `ledger.sqlite3`），关掉的就是那个文件（这一点是推断，未实测）。`Run.__exit__` 收到 `KeyboardInterrupt` 后会继续写账本和 `record.json`，正好可能复用这个号码。时间线：10:00:00.000 线程 A 开始等锁，创建帮手并调用 `start()`；10:00:00.0003 用户按 Ctrl-C，异常在 `start()` 等报到时冒出、变成 `RuntimeError`；代码以为线程没启动，拿着内部小锁去关句柄，卡住；线程 B、C 的等待都卡在内部小锁上，其中一个帮手已经拿到写锁也交不出去；从此这个进程不再动，全机写入被挡住。文档说“Ctrl-C 后让程序退出、系统会放锁”，但这里程序自己退不出来。发生条件很窄（中断恰好落在启动线程的几百微秒里），但后果是死锁和关错文件，而且修法简单。这段代码是第 6 轮为 B1-R5-4 加的，我上一轮没有发现。 | 不要在“不确定线程是否已经启动”时由调用方关闭句柄。可选做法（由 Analyst 选，越简单越好）：(a) 让后台线程自己打开句柄（在 `_wait` 开头、拿小锁登记到 `_WAITER_HANDLES`），这样线程没启动就根本没有句柄，调用方永远不需要替它关；打开失败的错误照常交给认领者。(b) `start()` 抛异常时一律按“被打断”处理：清除认领、放回空闲表或标记放弃，句柄由线程（如果它确实在跑）自己关；真正“无法创建线程”时会留下一个不占锁的句柄，在文档里写明。无论哪种，关闭句柄都不要放在持有内部小锁的时候做可能阻塞的事。加一个确定性测试：替换 `Thread.start` 为“真正启动后再抛 `RuntimeError`”（像 `probe-b1r7/startexc.py` 第 2 部分），另一个线程或进程 0.3 秒后放锁，断言：调用方在等待秒数内收到异常、没有任何线程卡住、没有出现第二次关闭（例如帮手线程没有报 `EBADF`）、锁最终是空的。保留现有 `test_waiter_thread_that_cannot_start_closes_its_handle` 所覆盖的“真的没启动”场景（如果改成做法 b，相应调整断言）。同时把 `:247` 的注释和 README/ADR 的说法改准确。 |
+| B1-R7-2 | owner-question（non-blocking） | `src/data_io/layout.py:97-338` | **复杂度大大超过负责人选 B 时的预期。** 负责人选 B 时，问题里写的代价是“约 30–40 行代码”。改动前（HEAD）`_lock` 约 29 行；现在等锁相关代码（帮手类、空闲帮手表、认领交接、fork 钩子、可重入小锁、打断处理）约 230 行（不含空行和注释约 180 行），锁相关测试现在有 51 个（用上面的 `-k` 选出，含以前轮次的）。最近三轮每一轮的修复都带出了新的并发问题（第 5 轮的复用 → B1-R6-1；第 5 轮的打断修复 → B1-R7-1）。这不是某一行写错，而是设计本身在变重，按 PROJECT §11“简单优先”“半夜好排查”，应该让负责人知道并决定。 | 见下方问题。 |
+| B1-R7-3 | suggestion | `src/data_io/layout.py:172-173`；`tests/test_writer_recovery.py` | “把 `Event.set` 挪回内部小锁里面”这个改法没有任何测试失败（我的改动测试 I）。目前的正确性不依赖它，所以只是缺一道防回退的网。 | 可选：加一个小测试，例如让 `finished.set` 阻塞一会儿，断言这期间别的线程仍能进入内部小锁；或在注释里写明这是可选的防护，不需要测试。 |
+
+### Owner questions
+
+**问题（B1-R7-2，non-blocking）：等写锁的代码越来越复杂，要继续用现在的做法，还是简化？**
+
+1. 背景：你在第 4 轮选了 B（“等通知”：后台帮手排队等钥匙，锁一放就叫醒），当时估计约 30–40 行代码；为了补上审查中发现的漏洞，现在这部分已经约 230 行。
+2. 场景：第 5 轮发现“反复重试会越积越多帮手和打开的文件”，于是加了“复用帮手”；第 6 轮发现“复用帮手后两个线程可能同时以为自己拿到锁”，于是加了“认领交接”；第 6 轮还加了“被 Ctrl-C 打断时的收尾”，本轮又发现其中“线程启动时被打断”会让程序卡死。每补一次都修好了上一个问题，但新代码又带来新的极端情况。正常使用（不按 Ctrl-C、不在多线程里反复超时）时，现在的代码在我的所有探测里都正确。
+3. 选项：
+   - **A. 保留现在的做法，修好 B1-R7-1 后冻结。** 会发生什么：功能最全（重试不积累、fork 安全、多线程安全）。之后只修真正的错误，不再为“信号打断”之类的极端情况加代码，剩下的限制写在文档里。代价：约 230 行比较难懂的并发代码，以后排查问题需要读懂它。
+   - **B. 去掉“复用帮手”，回到“每次等待一个帮手”。** 会发生什么：认领交接整套可以删掉，代码大约少三分之一，B1-R6-1 这类问题不会再出现。代价：同一个程序用很短的等待秒数反复重试时，每放弃一次就多一个帮手和一个打开的文件，直到锁空出来；要在文档里写“不要短等待反复重试，改用一次较长的 `writer_lock_timeout_seconds`”。需要再走一到两轮审查。
+   - **C. 退回改动前的轮询（每 50 毫秒看一次）。** 会发生什么：代码最简单（约 30 行）。代价：第 4 轮实测的问题回来——一个任务连续写文件时，另一个任务可能一直等到超时；这等于推翻你之前选 B 的决定。
+4. 我的建议：**A**。理由：现在的代码在正常使用下已经通过了所有压力和竞争探测，B1-R7-1 的修法很小；再大改反而要重新经历几轮审查，风险更大；只要从此冻结、把剩余限制写清楚，复杂度不会继续增长。
+
+### Analyst response
+| ID | Action (fixed / disputed / deferred-to-owner) | Detail and checks |
+| --- | --- | --- |
+
+- Round result: `changes requested`。B1-R6-1 已 resolved（结构上和实测上都确认），B1-R6-2 采纳的改动本身正确；但新的 must-fix B1-R7-1（启动帮手线程时被打断会关错句柄，macOS 上可导致整个程序死锁并一直占着写锁）未解决，B1 尚未收敛。B1-R7-2 是 non-blocking 的负责人问题，在阶段汇报时问；B1-R7-3 是可选建议。lint、format、全量测试（470 passed）由 Reviewer 本轮在隔离的 worktree 中亲自运行通过；锁测试重复 30 次、负载下 18 次、3.13 下 10 次均通过。说明：所有探测只在 macOS 上运行；Linux 上 `close` 不会等 `flock` 返回，所以推断 B1-R7-1 在 Linux 上不会卡死，但“同一号码关两次”仍会发生（未实测）。负责人条件 2（合并前在 Linux 上跑一次连续写测试）仍未满足，文档已写明只在 macOS 验证过。
+
+负责人确认（2026-11-19）：B1-R7-2 选 A，修好 B1-R7-1 后冻结等锁实现，之后只修真正的错误，剩余极端情况写进文档。
+
+### Analyst response（Analyst 第 8 步，2026-11-19，由 Orchestrator 按 Analyst 回复填写）
+| ID | Action | Detail and checks |
+| --- | --- | --- |
+| B1-R7-1 | fixed | `layout.py`：帮手线程自己在 `_WAITERS_MUTEX` 内打开并登记句柄，之后的 `flock`、交出、关闭都只由该线程完成；调用方不再打开或关闭帮手句柄；删去“未启动就关闭”分支；`start()` 未走到或抛异常时只清除认领、不放回空闲表。净改动 +34/−36。新测试 `test_start_that_raises_after_the_waiter_runs_neither_hangs_nor_closes_its_handle`（在第 7 轮代码上卡住失败）。Reviewer 的 `startexc.py`、`startexc2.py`（3.9、3.13）：约 0.05 秒收到异常，无卡死，无误关文件。 |
+| B1-R7-3 | fixed（采纳 suggestion） | 新测试 `test_waiter_signals_the_caller_outside_the_mutex`；把 `Event.set` 挪回锁内时失败。 |
+| B1-R7-2 冻结 | done | ADR-003 写锁一节新增“冻结（负责人，2026-11-19）”说明；CHANGELOG 加一句。 |
+
+Analyst 检查：ruff、format 通过；全量 472 passed（3.9，含 B2）；锁测试连跑 30 次、负载下 18 次通过；3.13 全量 470 passed、2 failed（已知 B1-R4-3），锁测试 10/10；`stress7.py` 7 次重叠 0；多线程随机中断 3.9 40 次：卡死在关闭上 0 次，2 次为已写进文档的 3.9 `with` 退出漏放小锁；3.13 25 次全部正常。改动文件：`src/data_io/layout.py`、`tests/test_writer_recovery.py`、ADR-003、`CHANGELOG.md`。只在 macOS 运行。
+
+## Block B1 · Round 8 · 2026-11-19
+
+**结论先说：** 第 7 轮的 must-fix B1-R7-1 已经修好：现在后台帮手线程自己打开、自己关闭它的锁文件句柄，调用方再也不碰这个句柄，所以“启动线程时被打断”不会再让程序卡死，也不会把同一个号码关两次。我用第 7 轮的复现脚本重跑：0.05 秒就收到异常，期间新打开的文件没被误关；新测试在第 7 轮代码上失败、在本轮代码上通过。B1-R7-3 的测试也有效。lint、format、全量测试（472 passed）都通过，锁测试重复 30 次、加负载 18 次都通过。**但这次改动带来了一条新的出错路径——“帮手线程自己打开文件时就失败”——目前没有任何测试覆盖（B1-R8-1，should-fix）。** 现在的代码在这条路径上是对的（我实测过），但我故意改坏其中一行后，53 个锁测试全部仍然通过，而改坏后的程序会在别的进程占着锁时**以为自己拿到了锁，直接开始写**——也就是两个任务同时写。只需要补一个测试，不用改代码。另外两条是可选建议。本轮是 B1 的第 8 轮，已经到轮数上限，需要负责人决定是否再给一轮（见下方问题）。本轮结果：`changes requested`。
+
+先解释几个词：
+- **后台帮手（线程）**：替调用者“排队等钥匙（写锁）”的帮手。
+- **句柄**：程序打开文件时操作系统发的“号码牌”。号码牌关掉后，这个号码可能马上发给下一个打开的文件。
+- **改坏测试（mutation）**：故意把代码改坏一行，看测试能不能发现。如果改坏了测试还全部通过，说明这一行没有测试守着，以后有人不小心改错也不会被发现。
+
+- Revision: `codex/pr2-run-ledger` @ `4cd778e` + `<scratchpad>/all.patch`（B1 + 已收敛的 B2）。在自己的 worktree `<scratchpad>/wt-b1r8`（`git worktree add --detach … HEAD` 后 `git apply all.patch`）审查；`git status --short` 显示 13 个修改文件、没有未跟踪文件；逐个 `cmp` 与主工作区一致（主工作区另有 `AGENTS.md`、`docs/pr2/PLAN.md`、`docs/pr2/REVIEW_LOG.md` 的流程文档改动，不属于本次修订）。另建 `<scratchpad>/wt-r7`（HEAD + `all-round7.patch`），`diff -rq` 显示本轮只改了 `src/data_io/layout.py`、`tests/test_writer_recovery.py`、ADR-003、`CHANGELOG.md`，与 packet 一致。B2 不在本轮审查范围，只确认整体测试通过。
+- Addresses: B1-R7-1（must-fix）、B1-R7-3（suggestion）、B1-R7-2 负责人决定（选 A，冻结）的文档落实。
+- Checks run by Reviewer（worktree 中，macOS，CPython 3.9.6，除非另注）：
+  - `uv run ruff check .` → All checks passed!
+  - `uv run ruff format --check .` → 30 files already formatted
+  - `uv run pytest tests/ -v -p no:cacheprovider` → **472 passed** in 13.42s
+  - 锁测试重复：`.venv/bin/python -m pytest tests/test_writer_recovery.py -q -p no:cacheprovider -k "waiter or zero_timeout or successful_wait or interrupt or back_to_back or open_write_layout or lock or fork or layout_bypass or reuse or bounded or hands_back or release or start or signals"` 连续 30 次 → 30/30 通过（每次 53 passed, 39 deselected）。
+  - 加负载（`<scratchpad>/probe-b1r8/load.sh`）：24 个 `yes > /dev/null` 占满 12 核，同时 6 个上面的 pytest 并行，共 3 轮 → 18/18 都是 53 passed（9.97–10.56 秒）；其中一次有 pytest 自己清理临时目录的 `PytestWarning`（并行运行互删目录，与项目代码无关，第 7 轮也出现过）。
+  - **Python 3.13.18**（临时环境 `uv venv --python 3.13` + `uv pip install --offline pydantic python-dotenv pytest duckdb pyarrow`，结束后已删除）：全量 `python -m pytest tests/ -q -p no:cacheprovider` → 2 failed, 470 passed，失败的仍只是已知的 B1-R4-3（`test_excessively_nested_source_json_retains_evidence`）；锁测试连跑 10 次 → 10/10 通过。
+  - **新测试能否抓住原问题**：把本轮的测试文件放进 `wt-r7`（第 7 轮代码）运行 `-k "start_that_raises or signals_the_caller"` → `test_start_that_raises_after_the_waiter_runs_neither_hangs_nor_closes_its_handle` 失败（“the wait blocked closing the running waiter's handle”），`test_waiter_signals_the_caller_outside_the_mutex` 通过（第 7 轮代码本来就在锁外 `set`，符合预期）。之后已恢复 `wt-r7` 的测试文件。
+  - **B1-R7-1 复现脚本**（`<scratchpad>/probe-b1r7/startexc.py 2`、`startexc2.py 2`，在本轮代码上）：两次都是约 0.05–0.06 秒收到 `RuntimeError`，帮手线程仍在、`_WAITER_HANDLES` 里是它自己的号码、空闲表为空；随后新打开的“受害者”文件拿到下一个号码，放锁后该文件**仍然打开**（第 7 轮代码在这里卡住或误关）。
+  - **改坏测试**（`<scratchpad>/probe-b1r8/mut8.py`，在单独的 `wt-mut8` 中逐个改坏 `layout.py` 后跑上面的锁测试，结束后 `cmp` 确认已恢复）：
+    - M3“`start()` 失败后仍放回空闲表”、M4“在 `start()` 之前就标记已启动”→ 各 10 个测试失败；M5“永不复用”→ 4 个失败；M6“`Event.set` 挪回小锁里”→ 1 个失败（新测试）；M7“打开后不登记句柄”→ 5 个失败。
+    - **M1“去掉 `if fd is not None:` 判断”→ 53 个全部通过**；**M8“`except Exception` 改成 `except OSError`”→ 53 个全部通过**；**M2“打开和登记不放在小锁里”→ 53 个全部通过**。见 B1-R8-1、B1-R8-2。
+  - **帮手线程打开失败**（新写的 `<scratchpad>/probe-b1r8/openfail.py`：另一个进程一直占着锁，只让帮手线程里的打开失败）：本轮代码上，A“打开报 `EMFILE`（文件开太多）”→ 0.00 秒收到 `OSError: [Errno 24]`；B“不是普通文件”→ 0.00 秒收到 `WriteBoundaryError`；D“真实地把 `.writer.lock` 换成目录”→ 0.00 秒收到 `IsADirectoryError`；三种情况结束后帮手线程 0、`_WAITER_HANDLES` 空、空闲表空、指向锁文件的句柄 0。C“打开慢 0.3 秒后失败、等待时间 0.05 秒”→ 0.31 秒后收到那个 `OSError`（见下方“观察”）。**同一脚本在 M1 上：A、B、D 都是约 1.01 秒后“拿到锁”进入了持锁区段，而锁其实一直被另一个进程占着**；在 M8 上：B 变成 1 秒超时，并在空闲表里留下一个已经死掉的帮手。
+  - **fork 恰好发生在“帮手线程启动后、句柄登记前”**（新写的 `<scratchpad>/probe-b1r8/forkopen.py`：另一个进程一直占锁；3 个线程不停新建帮手（只在探测里关掉复用，强迫每次都新开线程和句柄），主线程同时不停 fork，每个子进程数自己手里指向锁文件的句柄）：本轮代码 2 次 → 各 987 次 fork，**子进程持有锁文件句柄 0 次**；结束放锁后帮手 0、句柄 0、锁空。对照 M2（打开和登记不在小锁里）2 次 → 928 次中 70 次、931 次中 66 次子进程带着帮手的句柄。说明 fork 钩子在新做法下仍然有效，而且是靠“打开+登记都在小锁里”这一点。（这个探测因为关掉了复用，最后开到了 4091 个线程、碰到系统线程上限，`start()` 报 `can't start new thread`；这正好又验证了“线程真的没启动”这条路径：结束时帮手 0、句柄 0、锁空。）
+  - **正常使用有没有泄漏**（新写的 `<scratchpad>/probe-b1r8/leak.py`：另一个进程不停拿锁放锁，2 个线程反复 `_lock(root, 1)`，2 个线程用 0.3 毫秒超时反复放弃和复用，每次 8 秒）2 次 → 成功 5860/2537 次、放弃 26600/10034 次，帮手最多同时 4 个（= 同时在等的次数），结束后打开的文件数 5→5、线程数 1→1、`_WAITER_HANDLES` 和空闲表为空。
+  - **两个线程同时持锁**（第 7 轮的 `<scratchpad>/probe-b1r7/stress7.py 10 <间隔> 8 <模式>`）：等待模式 3 次、真实入口 `_lock` 模式 2 次 → 共约 6 万次“拿到”，重叠 0、拿到却没有句柄 0、句柄不持锁 0、别人能抢到 0；结束时锁空、帮手和句柄表为空。
+  - **多线程 + 随机 Ctrl-C**（第 7 轮的 `intr7mt3.py`，复制到 `<scratchpad>/probe-b1r8/mt/`，用 `probe-b1r7/drv3.sh` 驱动，每次 7 秒、约 1800 次打断）：3.9 共 25 次、3.13 共 10 次 → **两个线程同时持锁 0 次，没有一次卡在关闭句柄上（第 7 轮的 B1-R7-1 栈不再出现）**。34/35 次结束时锁空。1 次（3.9，seed 13）：主线程在 `_wait_for_lock` 收尾的 `with` 结束处被打断（`layout.py:265`），之后小锁一直被占：同进程 3 个后台线程卡在 `:256` 等小锁，几个帮手卡在 `:161`/`:167` 等小锁，其中一个已拿到写锁交不出去，于是这个进程一直占着写锁。这正是 ADR-003 和 README 已写明的“Python 3.9 上 Ctrl-C 后继续运行，内部小锁可能一直被占，同进程其他线程的等锁会卡住，锁被占到进程退出”。每次结束时本进程还留着 3–18 个指向锁文件、但不占锁的句柄（文档已写明“可能留下一个打开的锁文件句柄（不占锁）”）。另加诊断版 `intr8diag.py`（3.9 共 8 次）：结束时小锁都是空的；个别“剩 1 个帮手线程”的情况，该线程没有任何正在运行的 Python 栈，且同一次运行里都出现了 `start()` 被打断后抛出的 `RuntimeError: release unlocked lock`，是 CPython 对“启动被打断的线程”的记账残留，不占句柄也不占锁。
+  - 结束后删除 `wt-b1r8`、`wt-r7`、`wt-mut8` 三个 worktree 和 3.13 临时环境，`git worktree list` 只剩主工作区。新探测脚本留在 `<scratchpad>/probe-b1r8/`。
+
+### Previous findings
+| ID | Status | Evidence |
+| --- | --- | --- |
+| B1-R7-1 | resolved | 结构上：`layout.py:157-180` 帮手线程在 `_wait` 开头、在小锁里自己 `_open_lock_file` 并登记到 `_WAITER_HANDLES`（`:161-163`），之后 `flock`、交出、关闭都只在这个线程里（`:171-176`）；`_wait_for_lock`（`:250-268`）里调用方不再打开或关闭任何帮手句柄，原来“`start()` 抛异常就关句柄”的分支已删除；`start()` 没走到或抛异常时（`started` 为假）只清除认领、不放回空闲表（`:263-265`），线程如果其实在跑，拿到锁后会因为没人认领而自己关句柄放锁。小锁里不再做会被别人的 `flock` 卡住的 `close`。实测：新测试在第 7 轮代码上失败、本轮通过；`startexc.py`/`startexc2.py` 约 0.05 秒返回，受害者文件没被关；随机 Ctrl-C 35 次没有出现第 7 轮那种卡死栈；M3、M4 两种改坏都有 10 个测试失败。`:247` 那句旧注释已不存在；README:58“Ctrl-C 后让程序退出，系统会放锁”现在对这种情况成立。 |
+| B1-R7-3（suggestion） | resolved | 新测试 `test_waiter_signals_the_caller_outside_the_mutex` 在 `set` 时从另一个线程试拿小锁；M6（挪回锁内）时它失败，其他时候通过。 |
+| B1-R7-2（owner-question） | 已由负责人决定（选 A，冻结），文档已落实 | PLAN §4b 有 2026-11-19 的决定记录；ADR-003 写锁一节末尾新增“冻结（负责人，2026-11-19，B1-R7-2）”；CHANGELOG 加了 B1-R7-1 的说明。本轮代码净改动很小（删掉了“未启动就关闭”分支和 `start_failed` 标记，没有新机制），符合冻结。 |
+| P1-F2、P1-F3（负责人选 A、B） | 维持 resolved | 入口与“等通知”做法没变；负责人条件 1 的测试在 30 次重复、18 次负载、3.13 下 10 次中全部通过。条件 2：仍没有在 Linux 上运行，文档照旧写明“只在 macOS 验证过”。 |
+| B1-R4-3 | out-of-scope（未变） | 3.13.18 上仍是那 2 个 PR1 用例失败。 |
+| B1-R6-1、B1-R6-2 及更早的 B1 findings | resolved（维持） | 相关结构未变；`stress7.py` 重叠 0；对应测试在 472 个中通过。 |
+
+**按负责人冻结决定对剩余极端情况的分类：** 负责人的标准是：已写进文档的极端打断情况可以接受，除非它会损坏数据、让两个任务同时写、或让一个**没被打断**的进程卡住。本轮实测到的剩余情况：(1) 被打断后留下不占锁的句柄（每次运行 3–18 个）；(2) 3.9 上被打断的进程自己卡住、一直占着写锁到退出（35 次中 1 次）；(3) 启动被打断后留下一个不复用的帮手线程，拿到锁后自己放掉。三者都只发生在“程序捕获 Ctrl-C 后继续运行”的那个进程里，ADR-003 和 README:58 都已写明；别的进程只会等到超时后报 `WriteBoundaryError`，不会卡住；所有探测里两个线程同时持锁都是 0 次，没有写坏数据。所以都归为**可以接受，不需要再改**。
+
+**文档对照：** README:58、`src/config/README.md:29`、`src/config/README_FOR_DEVELOPER.md:29` 本轮没改，内容仍与代码一致（“放弃后后台线程和它打开的文件一直等到锁空，拿到立即释放；复用；fork 子进程关闭继承的文件；Ctrl-C 后可能留下不占锁的句柄”）。ADR-003 新写的“锁文件句柄由该线程自己打开、自己关闭，调用方从不替它关闭”和“`Thread.start()` 可能在线程已经运行之后才抛异常……只是不再复用这个线程”与代码和我的实测一致。CHANGELOG 新句“an exception raised while it is being started cannot block the caller or close that handle twice”与实测一致。`_wait_for_lock` 文档字符串去掉了“可能留下一个打开的句柄”，正确：现在这个函数本身不再打开句柄，留下句柄只可能发生在 `_lock` 自己的第一次打开（`:316`、`:324`），`_lock` 的文档和 README 仍有说明。
+
+**硬规则 8–11 核对：** 规则 8：没有新增数据路径，锁文件仍是 `DATA_ROOT/.writer.lock`。规则 9：`open_write_layout` 未变。规则 10：没有新增可调参数或散落的数字。规则 11：本轮没有改 `src/config/` 的任何文件（`diff -rq` 确认）。另外规则 2（不悄悄丢掉错误）：帮手线程打开失败时，有人在等就把错误交给等的人抛出（实测 A、B、D），没人等就走原来的 `writer.lock_wait_error` 警告日志。
+
+**观察（不作为 finding）：** 帮手线程在小锁里打开文件（`:161-163`），所以如果磁盘很慢、打开要很久，调用方的等待会多出这段时间，同进程其他线程的等锁和 fork 也会等这段时间（实测 C：模拟打开要 0.3 秒，等待时间 0.05 秒的调用 0.31 秒后才返回）。第 7 轮代码同样是在小锁里打开（在调用方线程里），而 `_lock` 自己的第一次打开也不受等待时间限制，所以这不是本轮新增的问题；正常本地文件打开只需几微秒。
+
+### New findings
+| ID | Severity | Location | Finding | Suggested direction |
+| --- | --- | --- | --- | --- |
+| B1-R8-1 | should-fix | `src/data_io/layout.py:160-178`（`_wait` 里 `except Exception` 和 `if fd is not None:`）；`tests/test_writer_recovery.py`（缺测试） | **本轮新出现的“帮手线程自己打开文件就失败”这条路径没有测试守着，其中一行改错就会让两个任务同时写，而现有测试发现不了。** 以前打开是在调用方线程里做的，失败会直接抛给调用方；本轮把打开挪进帮手线程，失败要靠 `except Exception` 接住、靠 `if fd is not None:` 跳过关闭、再把错误交给调用方。现在的代码是对的（实测 A/B/D 都立即收到正确的错误，什么都不留下）。但改坏测试显示：M1 去掉 `if fd is not None:` 这一行，53 个锁测试全部通过，而实际行为是：`os.close(None)` 在帮手线程里报 `TypeError`，线程在交出错误之前就死了，但已经标记了“完成”；调用方等满 1 秒后看到“完成且没有错误”，就当作拿到了锁。时间线：10:00:00 任务 B 正在写、占着锁；10:00:00 任务 A 要写，帮手线程打开文件失败（例如进程打开的文件太多，`EMFILE`）；10:00:01 任务 A 以为拿到锁，开始写——**这时 A 和 B 同时在写**。M8（只接 `OSError`）也没有测试失败：锁文件不是普通文件时，调用方等满超时才报“被别人占着”，错误原因被换掉，还在空闲表里留下一个死掉的帮手。这不是现在的错误，而是本轮新路径缺一道防回退的网；按负责人的冻结决定，补测试不是新机制。 | 只加测试，不改代码。例如：用 `monkeypatch` 让 `_open_lock_file` 只在线程名为 `writer-lock-waiter` 时抛错（一次 `OSError(errno.EMFILE, …)`，一次 `WriteBoundaryError`），另一个进程（或 `_hold_lock`）占着锁，用 `lock_timeout_seconds=1` 的 writer 写文件，断言：很快（远小于 1 秒）收到对应错误（经 writer 后是 `WriteBoundaryError`，信息里含原因）、没有写出任何文件、`_assert_no_waiter_state()`、锁仍被原持有者占着。在 M1、M8 上它应当失败（可以用 `<scratchpad>/probe-b1r8/openfail.py` 的做法对照）。 |
+| B1-R8-2 | suggestion | `src/data_io/layout.py:161-163`；`tests/test_writer_recovery.py` | “打开+登记都在小锁里”保证 fork 恰好发生在“帮手启动后、登记前”时，子进程也不会带走帮手的句柄（实测本轮 0/987，改坏后 66–70/930）。现有 fork 测试只覆盖“登记之后才 fork”，所以 M2（把打开挪出小锁）没有测试失败。后果是 B1-R5-3 的老问题回来：子进程替父进程一直占着锁，其他任务等到超时。发生窗口很窄，不会写坏数据，所以只是建议。 | 可选：加一个确定性测试，让帮手线程里的 `_open_lock_file` 打开后通知主线程并停 0.2 秒，主线程这时 fork；子进程数自己手里指向锁文件的句柄，断言为 0（在 M2 上会是 1）。 |
+| B1-R8-3 | suggestion | `src/data_io/layout.py:203`、`:120-121` | 两处注释略不准确：`_take_idle_waiter` 里“A thread that never started cannot deliver the lock; drop it.”——本轮之后，没启动成功的帮手根本不会进空闲表，这个 `is_alive()` 检查现在只是防御（例如线程意外死掉）；小锁说明里“Its critical sections only do non-blocking work”——帮手线程在小锁里打开文件，是一次很短但会碰磁盘的系统调用（见上面“观察”）。 | 可选：改成“防御：丢掉已经不在运行的帮手”和“只做很短的操作（包括打开锁文件）”。 |
+
+### Owner questions
+
+**问题（B1 轮数上限，blocking）：B1 已到第 8 轮上限，还剩一个“只需补测试”的问题，要不要再给一轮？**
+
+1. 背景：每块最多审查 8 轮，到了上限要由你决定是否继续。B1 这一轮把第 7 轮的卡死问题修好了，现在代码在我所有的实测里都是对的；只剩一条：本轮新加的一条出错路径没有自动测试守着。
+2. 场景：现在的代码遇到“帮手打开锁文件失败”（例如程序同时打开的文件太多）时，会立刻报错、什么都不写，这是对的。但如果以后有人改代码时不小心删掉其中一行判断，现有的 53 个锁测试仍然全部通过，而程序会在别的任务占着锁时以为自己拿到了锁、开始写——两个任务同时写。我实测过这个“改坏一行”的情况。
+3. 选项：
+   - **A. 再给一轮，只补测试。** 会发生什么：Analyst 加一个约 20–30 行的测试（不改功能代码），下一轮 Reviewer 确认后 B1 收敛。代价：多一轮审查（主要是跑一遍检查）。
+   - **B. 现在就按收敛处理，把补测试记为后续要求。** 会发生什么：B1 马上可以提交；测试留到以后的 PR。代价：在补上之前，这一行没有防护，改错了不会被发现。
+4. 我的建议：**A**。理由：只加测试、不改代码，不违背冻结决定；它守的是“两个任务同时写”这种最严重的后果，成本很小。
+
+### Analyst response
+| ID | Action (fixed / disputed / deferred-to-owner) | Detail and checks |
+| --- | --- | --- |
+
+- Round result: `changes requested`。B1-R7-1 已 resolved（结构上和实测上都确认，新测试能抓住原问题），B1-R7-3 已 resolved，B1-R7-2 的冻结决定已写进 ADR-003；剩余的打断极端情况按冻结标准归为可接受（已写进文档，不会写坏数据、不会让两个任务同时写、不会卡住没被打断的进程）。新的 should-fix B1-R8-1（帮手线程打开失败这条新路径缺测试，改坏一行会导致两个任务同时写而测试发现不了）未解决，只需补测试、不需改代码。B1-R8-2、B1-R8-3 是可选建议。lint、format、全量测试（472 passed）由 Reviewer 本轮在隔离的 worktree 中亲自运行通过；锁测试重复 30 次、负载下 18 次、3.13 下 10 次均通过。本轮是 B1 第 8 轮（上限），是否继续由负责人决定（上方 blocking 问题）。说明：所有探测只在 macOS 上运行；负责人条件 2（合并前在 Linux 上跑一次连续写测试）仍未满足，文档已写明只在 macOS 验证过。
+
+负责人确认（2026-11-19）：B1 再给一轮（第 9 轮），只补测试，不改功能代码。
