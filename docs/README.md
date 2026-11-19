@@ -31,12 +31,14 @@
 | 文档 | 用途 |
 | --- | --- |
 | [`agent/PROJECT.md`](../agent/PROJECT.md) | v1 架构、数据布局、执行计划；文档冲突时以它为准 |
-| [`agent/AGENTS.md`](../agent/AGENTS.md) | 共享工作流、负责人确认关口、硬性规则和约定 |
-| [`agent/PLANNER.md`](../agent/PLANNER.md) | Planner：与负责人讨论设计和范围 |
+| [`agent/AGENTS.md`](../agent/AGENTS.md) | 共享工作流（阶段与两层循环、独立子代理）、负责人提问格式、对负责人的讲解要求、硬性规则和约定 |
+| [`agent/ORCHESTRATOR.md`](../agent/ORCHESTRATOR.md) | Orchestrator（主会话）：启动各角色子代理、转交问题、提交已收敛的块、维护 `PROGRESS.md`、快捷命令的具体执行 |
+| [`agent/PLANNER.md`](../agent/PLANNER.md) | Planner：写任务说明、划分代码块和验收例子 |
 | [`agent/ANALYST.md`](../agent/ANALYST.md) | Analyst：实施确认过的代码块，逐条处理 Reviewer 意见 |
-| [`agent/REVIEWER.md`](../agent/REVIEWER.md) | Reviewer：代码块循环内逐轮审查，直到没有阻塞性意见 |
-| [`agent/REPORTER.md`](../agent/REPORTER.md) | Reporter：报告代码块及审查带来的修改、提出后续修改建议、逐文件代码阅读 |
-| [`agent/VALIDATOR.md`](../agent/VALIDATOR.md) | Validator：所有循环结束后对整个 PR 的独立最终验证 |
+| [`agent/REVIEWER.md`](../agent/REVIEWER.md) | Reviewer：内循环中逐轮审查，用通俗方式提出设计问题（分阻塞 / 非阻塞），直到没有阻塞性意见 |
+| [`agent/REPORTER.md`](../agent/REPORTER.md) | Reporter：阶段完成后逐块讲解（一次一块），反馈修改后只汇报改动 |
+| [`agent/VALIDATOR.md`](../agent/VALIDATOR.md) | Validator：所有阶段验收后对整个 PR 的独立最终验证 |
+| [`.claude/agents/`](../.claude/agents/)、[`.claude/commands/`](../.claude/commands/) | Claude Code 的角色子代理定义和快捷命令（`/status`、`/continue-work`、`/explain`、`/start-fixes`、`/accept-phase`、`/decisions`、`/validate`、`/save-progress`） |
 
 ### 长期文档
 

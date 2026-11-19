@@ -2,67 +2,126 @@
 
 Project: prediction-market-datapipeline.
 
-## Workflow and roles
+## Workflow
 
-- Start each substantive PR or task by reading `agent/PROJECT.md`, this file, the request, and the relevant role guide. These are guidance files, not automatically running agents.
+Read `agent/PROJECT.md`, this file, the request, and the relevant role guide before substantive work. The main session the owner talks to is the Orchestrator and also follows `agent/ORCHESTRATOR.md`, starting each session by reading `docs/pr<N>/PROGRESS.md`. The other role guides are instructions for subagents; they do not run by themselves.
 
 ### Roles
 
-| Role | Guide | Responsibility | Modifies code? |
+| Role | Guide | Job | May edit |
 | --- | --- | --- | --- |
-| Planner | `PLANNER.md` | Define scope, blocks, and acceptance criteria; ask the owner about unresolved open choices. | No |
-| Analyst | `ANALYST.md` | Implement the agreed block; address review findings. | Yes |
-| Reviewer | `REVIEWER.md` | Review each Analyst revision inside the block loop; raise findings until none remain. | No |
-| Reporter | `REPORTER.md` | Report the converged block to the owner, including what review changed, and propose further changes. | No |
-| Validator | `VALIDATOR.md` | Independently validate the final change after all block loops finish, including code necessity and simplification proposals. | No |
+| Orchestrator | `ORCHESTRATOR.md` | The main session the owner talks to. Starts every other role as a subagent, relays owner questions, commits converged blocks, keeps `PROGRESS.md` current, keeps the owner informed. Never plans, codes, reviews, explains code, or validates itself. | Process records (`PROGRESS.md`, owner answers in `PLAN.md` and `REVIEW_LOG.md`) |
+| Planner | `PLANNER.md` | Turn the request into a plan of phases and blocks with acceptance examples. | `PLAN.md` |
+| Analyst | `ANALYST.md` | Implement a block; fix or dispute findings; apply owner feedback. | Code, tests, project docs, its response in `REVIEW_LOG.md`, checklist in `PROGRESS.md` |
+| Reviewer | `REVIEWER.md` | Review one Analyst revision per round; raise findings and owner questions. | Its round in `REVIEW_LOG.md` |
+| Reporter | `REPORTER.md` | Explain a finished phase to the owner, block by block, and answer follow-up questions. | `PROGRESS.md`, Decisions section of `PLAN.md` |
+| Validator | `VALIDATOR.md` | Independently check the whole PR after every phase is accepted. | Nothing |
 
-### Process
+**Independence.** Each role step is a **new subagent**; nobody, including the Orchestrator, plays two roles. The one exception is that a Reporter keeps answering the owner's follow-up questions for the phase report it started. Roles pass context only through files: `PLAN.md`, the revision packet, `REVIEW_LOG.md`, and `PROGRESS.md`. Reviewer and Validator never see Analyst's reasoning. In Claude Code, use the role agents in `.claude/agents/`; elsewhere use any separate-context mechanism and say which one was used.
+
+### Terms
+
+- **Block:** one change that can be reviewed on its own (e.g., PR2 `B2`, the SQLite ledger). IDs `B1`, `B2`, ….
+- **Phase:** a group of related blocks that is built completely and then reported to the owner together. IDs `P1`, `P2`, …. A small PR may be a single phase.
+- **Inner loop:** Analyst ⇄ Reviewer on one block until Reviewer marks it `converged`.
+- **Feedback loop:** owner feedback on a reported phase → inner loops on the affected blocks → Reporter reports the changes → more feedback, until the owner accepts the phase.
+
+### Flow
 
 ```text
-Planner prepares the brief and blocks using the owner's request and prior decisions
-  │
-  ├─► Block loop (repeat for each block)
-  │     ┌──────────────────────────────────────────────┐
-  │     │ 1. Analyst implements / revises the block     │
-  │     │ 2. Reviewer reviews the latest revision       │
-  │     │    ├─ open findings → back to step 1          │
-  │     │    └─ no open findings → converged            │
-  │     └──────────────────────────────────────────────┘
-  │     3. Reporter reports the block and proposes further changes
-  │     4. Continue within the authorized scope; ask the owner only
-  │        when an open decision cannot be resolved from project context
-  │
-  └─► All blocks done → Validator validates the final change
-        ├─ changes required → Analyst fixes → Reviewer loop → Reporter → Validator rechecks
-        └─ ready for owner review → owner decides merge
+Planner writes PLAN.md (phases + blocks) ─► owner approves the plan              [pause 1]
+│
+├─► Phase P1
+│     ├─ inner loop for each block: Analyst ⇄ Reviewer until converged
+│     │     (blocking design question ─► ask owner now                          [pause 2])
+│     │     (block converged ─► Orchestrator commits it to the PR branch)
+│     ├─ all blocks converged ─► Reporter explains P1, one block at a time      [pause 3]
+│     ├─ owner feedback ─► "start fixes" ─► inner loops on affected blocks
+│     │     ─► Reporter reports only what changed ─► more feedback …
+│     └─ owner says the phase is accepted
+├─► Phase P2 … (same)
+│
+└─► every phase accepted ─► Validator checks the whole PR
+      ├─ changes required ─► inner loops ─► Reporter reports the changes ─► new Validator rechecks
+      └─ ready for owner review ─► owner decides merge                          [pause 4]
 ```
 
-1. **Plan.** Planner prepares the task brief and meaningful blocks from the owner's request, prior decisions, and project rules (see `PLANNER.md`). Make and record routine choices autonomously. Ask the owner only when a material open question requires their preference, the available evidence cannot resolve a decision, or explicit authorization is otherwise required.
-2. **Implement.** Analyst implements one block and hands Reviewer a revision packet (see `ANALYST.md`).
-3. **Review.** Reviewer reviews the latest revision and records findings for the round (see `REVIEWER.md`). Analyst addresses every open finding — fix, or dispute with evidence — and hands over a new revision. Repeat steps 2–3.
-4. **Converge.** The block loop ends when Reviewer reports no open `must-fix` or `should-fix` findings on the latest revision and the required checks pass. `suggestion` and `out-of-scope` items do not block convergence; they pass to Reporter.
-5. **Report.** Reporter explains to the owner what the block does, what each review round changed, which disputes or deferrals remain, and proposes further changes for the next loop (see `REPORTER.md`).
-6. **Continue or ask.** After reporting, continue to the next authorized loop or block without requesting routine confirmation. Record agent-made choices and reasons separately from owner-confirmed decisions. Pause only work that depends on an unresolved open question or an explicitly required authorization; continue independent work where possible. Keep changes within the requested scope and honor any explicit request to pause or review first.
-7. **Validate.** After all authorized block loops are reported and no unresolved decision blocks validation, Validator independently validates the whole change (see `VALIDATOR.md`). Findings return to Analyst and go through the Reviewer loop and a Reporter report again before Validator rechecks. Only `ready for owner review` ends the workflow; the owner decides merge.
+### Steps
 
-### Loop rules
+1. **Plan.** A Planner subagent writes `docs/pr<N>/PLAN.md`: goal, scope, phases, blocks with acceptance examples, and dependencies between blocks. Routine choices are made and recorded with their reason; open choices become owner questions. **Pause 1:** work starts only after the owner approves the plan.
+2. **Inner loop (each block of the current phase).**
+   1. An Analyst subagent implements the block and ends with a revision packet.
+   2. A new Reviewer subagent reviews the revision on disk, reruns the checks itself, and writes the round in `REVIEW_LOG.md`.
+   3. If any `must-fix` or `should-fix` is open, a new Analyst step addresses each one (fixed or disputed with evidence), then a new Reviewer round follows. A fix counts as resolved only after a later Reviewer round confirms it.
+   4. The block is `converged` when no `must-fix`, `should-fix`, or blocking owner question is open and lint, format, and the full test suite pass in Reviewer's own run.
+   5. The Orchestrator then commits the block's changes to the PR branch (never pushes) with a message naming the block and its final review round.
 
-- **Review log.** Record every round in `docs/pr<N>/REVIEW_LOG.md` on the PR's working branch (create it on the first round of the PR). It is a process record and is not merged into `main`. Each round lists the reviewed revision, findings with IDs and severity, Analyst's response, and the checks each side actually ran. Reporter and Validator read this log; it is the evidence of what the loop changed.
-- **Round limit.** If a block has not converged after 3 review rounds, or Analyst and Reviewer disagree on a finding after one exchange, stop the loop and escalate to the owner through Reporter with both positions. Do not loop indefinitely or let either role silently drop a finding.
-- **Scope.** Reviewer findings must concern the current block and brief. New features, redesigns, or later-PR work are marked `out-of-scope` and go to Reporter as proposals; Analyst does not implement them unless already authorized.
-- **Design decisions.** Resolve routine implementation and design choices using the approved project rules and task context; explain tradeoffs and record the decision. Escalate a genuinely open question that requires the owner's preference, a conflict with an approved decision, or a new dependency requiring authorization before implementing it.
-- **Independence.** Run Reviewer and Validator in a context separate from Analyst (e.g., a fresh subagent or session) that receives the revision packet, not Analyst's reasoning. Validator should also be separate from Reviewer. For small tasks one agent may perform multiple roles, but say so explicitly in the report; a separate context is preferred for high-risk changes and is not proof of independence.
-- **Small tasks.** For trivial changes (typos, documentation-only wording) the owner may waive the review loop or the Validator gate; record the waiver in the report.
+   The owner is not given a report during the inner loop, only a one-line progress note after each step (e.g., "B2 round 2 reviewed: 1 should-fix open, back to Analyst").
+3. **Phase report.** When every block of the phase has converged, a Reporter subagent explains the phase in Chinese, **one block at a time**, and moves to the next block when the owner says so (see `REPORTER.md`). It also asks the non-blocking owner questions collected during review. **Pause 3:** the workflow waits while the owner reads and asks questions; the same Reporter answers follow-ups.
+4. **Feedback.** Reporter records each owner remark with an ID (`P1-F3` = phase 1, feedback 3) and a type:
+   - *question*: Reporter answers it; no code change and no record needed;
+   - *change request*: added to the open change requests in `PROGRESS.md` and handled in the feedback loop;
+   - *decision*: recorded as owner-confirmed in the Decisions section of `PLAN.md`; if it needs a code change it is also added as a change request.
+5. **Feedback loop.** When the owner says "start fixes", the Orchestrator groups the open change requests by block and runs an inner loop for each affected block. Then a Reporter subagent reports **only what changed**: each feedback item, how it was handled, the review rounds it took, and the checks rerun. Blocks without changes are not re-explained. Each Reviewer round names the feedback IDs it addresses, so `REVIEW_LOG.md` keeps the history. Repeat steps 4–5 until the owner says the phase is accepted; record the acceptance in `PLAN.md`. Then start the next phase.
+6. **Validate.** When every phase is accepted, a Validator subagent checks the whole PR. Its findings go through inner loops and a changes-only Reporter report; then a **new** Validator subagent rechecks. Only `ready for owner review` ends the workflow. **Pause 4:** the owner decides merge.
+
+Outside the four pauses and blocking owner questions, the Orchestrator keeps going without asking for routine confirmation, and stops whenever the owner asks it to.
+
+### Rules
+
+- **Every change goes through the loop.** This includes one-line fixes, doc changes that affect behavior or rules, and anything the owner asks for during a report. Nothing is edited directly in the main session. The owner may waive the loop for one trivial change (typo, wording); record the waiver in `PROGRESS.md`.
+- **Owner questions.** Any role raises one when the plan, earlier decisions, and project rules cannot settle a choice.
+  - *Blocking* (the current block cannot continue correctly without the answer): the Orchestrator asks it right away. Work on other blocks continues.
+  - *Non-blocking*: collected in `PROGRESS.md` and asked during the phase report.
+  - Every question uses this format, in Chinese, answerable in a minute by a non-specialist: (1) one-sentence background in everyday words; (2) a concrete scenario or short timeline showing what happens now; (3) two or three options, each saying what would happen and what it costs; (4) a recommendation with a one-sentence reason.
+  - Record each answer (date, "owner-confirmed") in the Decisions section of `PLAN.md` and in the review round that raised it.
+- **Round limit.** Up to 8 review rounds per block per loop. Escalate earlier only if Analyst and Reviewer still disagree on a finding after two exchanges, or the same finding stays `not resolved` for three rounds in a row. At 8 rounds the Orchestrator asks the owner whether to continue. After an owner decision the loop resumes; escalation never ends a block.
+- **Decisions.** Record agent-made choices with their reason separately from owner-confirmed decisions. Never change an approved decision without asking.
+- **Scope.** Findings concern the current block and plan. Later-phase or later-PR work is `out-of-scope` and goes into the phase report as a proposal.
+- **Records** (all on the PR's working branch only; never merged into `main`):
+
+  | File | Contents |
+  | --- | --- |
+  | `docs/pr<N>/PLAN.md` | Phases, blocks, acceptance examples; Decisions (owner-confirmed and agent decisions, phase acceptances); future-PR requirements. Grows over time. |
+  | `docs/pr<N>/REVIEW_LOG.md` | Every review round: what it addresses (findings, feedback IDs, Validator findings), checks each side ran, findings, Analyst responses, owner questions. Grows over time. |
+  | `docs/pr<N>/PROGRESS.md` | **Latest snapshot only**, rewritten each time: handoff note, status of each phase and block, open change requests, open owner questions, next step. Older versions live in git history. |
+
+  Block states: `not started` → `implementing` → `in review (round n)` → `waiting for owner` → `converged`. Phase states: `in development` → `ready to report` → `reporting` → `fixing feedback (loop n)` → `accepted`.
+
+### Talking to the owner
+
+The owner reads every report, question, and progress note, and is not a senior software engineer. Every role that writes for the owner follows these rules:
+
+- **Language.** Talk to the owner in Chinese. Write owner-facing documents (`PLAN.md`, `REVIEW_LOG.md`, `PROGRESS.md`, explanation notes) in Chinese, keeping code identifiers, commands, and severity labels in English. Agent documents (`agent/*.md`, `.claude/agents/`, `.claude/commands/`) are written in English.
+- **Plain words.** Short sentences. Explain every technical term in one simple sentence the first time it appears (e.g., "a transaction is a group of changes that either all happen or none happen"). If an explanation only makes sense to an expert, rewrite it.
+- **Human order.** Explain code in the order a person would follow it: what it is for and what triggers it, then the steps in the order they actually happen, saying *why* each step exists before *how* it works. Do not walk through functions in file order.
+- **Small examples.** Explain anything non-trivial with a concrete example using real values or a short timeline (e.g., "10:00 task A writes `a.parquet`; 10:01 task B tries to move the same checkpoint and is rejected because …").
+- **Conclusion first.** Start with the answer, then the details. Say clearly what was verified by running something and what is an inference.
+
+### Shortcut commands
+
+The owner can drive the workflow with short commands, in English or Chinese, with or without `/` (in Claude Code they are slash commands in `.claude/commands/`). `agent/ORCHESTRATOR.md` defines exactly what each one does.
+
+| Command | 中文 | Purpose |
+| --- | --- | --- |
+| `status` | `进度` | Where the PR stands |
+| `continue work` | `继续` | Run the next steps until the owner is needed |
+| `explain [phase or block]` | `讲解 [阶段或块]` | Reporter explains a phase, one block at a time (`next` / `下一个`) |
+| `start fixes` | `开始修改` | Send the phase's open change requests into the feedback loop |
+| `accept phase` | `这块可以了` | Accept the current phase and move on |
+| `decisions` | `待决定` | Ask every open owner question |
+| `validate` | `验证` | Run Validator once every phase is accepted |
+| `save progress` | `保存进度` | Rewrite `PROGRESS.md` as a short handoff for the next session; use at the end of every conversation |
 
 ### Handoff and evidence
 
-- At each handoff identify the task, branch and worktree or commit, changed files, decisions, actual checks and results, failures, and unverified items. Do not treat planning, a report, a converged review loop, or a green test as proof of production readiness.
-- Preserve existing work. Before a commit inspect staged changes; after a PR is opened, review the latest head and its checks. After merge, record the merged revision, verification, limitations, and handoff. Do not claim an unrun check passed or approve, merge, deploy, or trade without the owner's authorization.
+- Every handoff names the branch and commit or worktree, changed files (including untracked), decisions, checks actually run with results, failures, and unverified items. A plan, report, converged loop, or green test is not proof of production readiness.
+- Preserve existing work. Inspect staged changes before each commit; commit only converged blocks and process records, and never push, open a PR, or merge without the owner's instruction. After a PR is opened, review its latest head and checks. Never claim an unrun check passed, and never approve, merge, deploy, or trade without the owner's authorization.
 
 ## Authority and language
 
 - `PROJECT.md` is the single source of truth for the v1 rebuild. Resolve conflicting code or documentation against it unless an explicit architectural decision changes it.
-- Communicate with the project owner in Chinese. Prefer Chinese for new or updated Markdown and human-facing explanations where practical; retain clear English identifiers and established external formats. Do not translate existing files solely to change their language.
+- Communicate with the project owner in Chinese, following "Talking to the owner" above. Owner-facing documents are written in Chinese and agent documents in English; keep clear English identifiers and established external formats. Do not translate other existing files solely to change their language.
 
 ## Hard rules
 
@@ -85,7 +144,7 @@ Planner prepares the brief and blocks using the owner's request and prior decisi
 - Use `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pytest tests/ -v` before delivery.
 - Legacy indexers and analysis code are not on `main`; they are preserved on `archive/upstream-main-2026-11-13`. Bring a piece into the v1 pipeline only through its migration PR, adapted to the adapter and writer interfaces.
 - Keep documentation in the layout described by `docs/README.md`: long-term formal documents under `docs/`, architecture decision records under `docs/adr/`, and PR process records under `docs/pr<N>/` on the PR's working branch only. Add new formal documents to that index.
-- Keep `main` clean: it receives only pipeline code, tests, and formal documents through reviewed pull requests. Process records (`REVIEW_LOG.md`, `CODE_READING_PROGRESS.md`, plans, owner notes, superseded reports) stay on the PR's working branch, which is kept after merge as the audit trail; do not merge them into `main`. A concise post-merge summary report for a PR may live in `docs/reports/` (owner decision 2026-11-13).
+- Keep `main` clean: it receives only pipeline code, tests, and formal documents through reviewed pull requests. Process records (`PLAN.md`, `REVIEW_LOG.md`, `PROGRESS.md`, owner notes, superseded reports) stay on the PR's working branch, which is kept after merge as the audit trail; do not merge them into `main`. A concise post-merge summary report for a PR may live in `docs/reports/` (owner decision 2026-11-13).
 - Keep the new pipeline under `src/`; do not use a version number as the source folder name. Put settings and validation in `src/config/`, contracts in `src/data_schema/`, data directory and writer code in `src/data_io/`, and venue implementations in `src/adapters/`.
 
 ## Owner notes
