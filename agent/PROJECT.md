@@ -94,7 +94,7 @@ data/
 │   ├── events/ markets/ outcomes/ market_states/
 │   ├── trades/ book_snapshots/ book_deltas/ settlements/
 ├── gold/
-│   └── <venue>/<market_id>/market_1m/<data_version>/<UTC-date>.parquet
+│   └── market_1m/<venue>/<market_id>/<data_version>/<UTC-date>.parquet
 ├── quarantine/
 ├── recovery/                    # 保留冲突写入和中断的 partial
 └── manifests/
@@ -102,7 +102,7 @@ data/
 
 **Hard rule**: the data root must come from `DATA_ROOT` config. Never hardcode `data/...` paths in code.
 
-上面的 Gold 路径是首个分钟研究产品的目标约定，不表示已经实现；每个文件只含一个市场和一个 UTC 日期，同一市场的 outcome 可以共用文件。数据版本的 manifest 可引用旧版本中未变化的文件。市场 ID 必须安全映射到路径并保留来源标识。
+上面的 Gold 路径是首个分钟研究产品的目标约定，不表示已经实现；每个文件只含一个市场和一个 UTC 日期，同一市场的 outcome 可以共用文件。数据版本的 manifest 可引用旧版本中未变化的文件。市场 ID 必须安全映射到路径并保留来源标识。Silver 和 Gold 的第二级目录就是数据集名（如 `silver/trades/`、`gold/market_1m/`、`gold/training_datasets/<训练集名>/`），账本只登记放在自己数据集目录下的文件；Gold 第二级以下的结构由各产品的 PR 确定，Bronze 只按层检查（ADR-003，负责人决定 2026-11-19）。
 
 ## 6. Audit & Recoverability (Keep Record)
 

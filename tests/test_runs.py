@@ -157,6 +157,33 @@ def test_invalid_commit_is_rejected_before_publishing(tmp_path: Path) -> None:
     run.finish("failed", error="registration failed")
 
 
+def test_file_outside_its_dataset_folder_is_not_written(tmp_path: Path) -> None:
+    layout, config = _setup(tmp_path)
+    market_1m = FileFacts(dataset="gold.market_1m", row_count=2, validation="contract per row")
+    with Run.start(layout, config, RunSpec("t", "1")) as run:
+        for role, path, facts in (
+            (WriterRole.NORMALIZER, "silver/markets/a.parquet", FACTS),
+            (WriterRole.NORMALIZER, "silver/a.parquet", FACTS),
+            (WriterRole.PRODUCT, "gold/market_1s/kalshi/MKT-1/v1/20261113.parquet", market_1m),
+            (WriterRole.PRODUCT, "gold/kalshi/MKT-1/market_1m/v1/20261113.parquet", market_1m),
+        ):
+            with pytest.raises(LedgerError, match="file must be under"):
+                run.commit_file(role, path, b"x", facts, CheckpointAdvance("k", 1, 0))
+        assert list((tmp_path / "silver").iterdir()) == [] and list((tmp_path / "gold").iterdir()) == []
+        run.commit_file(
+            WriterRole.PRODUCT,
+            "gold/market_1m/kalshi/MKT-1/v1/20261113.parquet",
+            b"x",
+            market_1m,
+            CheckpointAdvance("k", 1, 0),
+        )
+        run.finish("succeeded")
+    with Ledger.open_read_only(tmp_path) as ledger:
+        assert [m["path"] for m in ledger.manifests(run.run_id)] == ["gold/market_1m/kalshi/MKT-1/v1/20261113.parquet"]
+        assert ledger.get_checkpoint("k")["version"] == 1
+        assert ledger.get_run(run.run_id)["rows_written"] == 2
+
+
 def test_registration_failure_after_publication_leaves_file_unregistered(tmp_path: Path) -> None:
     layout, config = _setup(tmp_path)
     run = Run.start(layout, config, RunSpec("t", "1"))

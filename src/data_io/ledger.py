@@ -232,6 +232,15 @@ def commit_values(path: str | Path, facts: FileFacts, checkpoint: CheckpointAdva
         or relative.name.startswith(".partial-")
     ):
         raise LedgerError(f"{facts.dataset} file must be a root-relative path under {layer}/: {path}")
+    if layer != "bronze":
+        # Silver datasets and Gold products each own the folder named after
+        # them (owner decision 2026-11-19, ADR-003): silver/trades/... holds
+        # only silver.trades, gold/market_1m/... only gold.market_1m. Deeper
+        # levels are left to each product's PR. Bronze has a single dataset,
+        # so only its layer is checked.
+        name = facts.dataset.split(".", 1)[1]
+        if len(relative.parts) < 3 or relative.parts[1] != name:
+            raise LedgerError(f"{facts.dataset} file must be under {layer}/{name}/: {path}")
     row_count = _count(facts.row_count, "row_count")
     validation = _text(facts.validation, "validation")
     min_time, max_time = _range(facts.event_time_range, "event_time_range", utc_text)
@@ -568,14 +577,17 @@ class Ledger:
                     "SELECT version, watermark FROM checkpoints WHERE checkpoint_key = ?", (checkpoint_key,)
                 ).fetchone()
                 current_version = 0 if current is None else current[0]
-                if current is not None and current[1] is not None and (watermark is None or watermark < current[1]):
-                    raise LedgerError(
-                        f"Checkpoint {checkpoint_key} watermark cannot move backwards or be removed; "
-                        "nothing was registered"
-                    )
+                # Version first: a stale expected_version means another run moved
+                # the checkpoint, and that is the real cause even when the stale
+                # caller's watermark would also look like moving backwards.
                 if current_version != expected:
                     raise LedgerError(
                         f"Checkpoint {checkpoint_key} is at version {current_version}, expected {expected}; "
+                        "nothing was registered"
+                    )
+                if current is not None and current[1] is not None and (watermark is None or watermark < current[1]):
+                    raise LedgerError(
+                        f"Checkpoint {checkpoint_key} watermark cannot move backwards or be removed; "
                         "nothing was registered"
                     )
                 values = (checkpoint_key, expected + 1, cursor_text, watermark, entry["path"], run_id, now)

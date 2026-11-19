@@ -81,10 +81,10 @@
 
 ## 7. Parquet、manifest 与数据生命周期
 
-Gold 数据按 venue、市场、产品、文件版本和 UTC 日期组织。不同 venue、不同市场分文件；每个文件只包含一个 UTC 日期，同一市场的多个 outcome 可在一个文件中区分。路径仅示意，市场 ID 的安全编码与各来源映射待实现时核实：
+Gold 数据按产品、venue、市场、文件版本和 UTC 日期组织。不同 venue、不同市场分文件；每个文件只包含一个 UTC 日期，同一市场的多个 outcome 可在一个文件中区分。`gold/` 下的第二级目录必须是产品名，与 Silver 的数据集目录同一规则（如 `gold/market_1m/`，跨市场的训练集放在 `gold/training_datasets/<训练集名>/`），账本拒绝登记放在别的产品目录或直接放在 `gold/` 下的文件（负责人决定 2026-11-19，ADR-003）。产品名以下的各级仅示意，由各产品的 PR 确定，市场 ID 的安全编码与各来源映射待实现时核实：
 
 ```text
-DATA_ROOT/gold/<venue>/<market_id>/market_1m/<data_version>/YYYYMMDD.parquet
+DATA_ROOT/gold/market_1m/<venue>/<market_id>/<data_version>/YYYYMMDD.parquet
 ```
 
 一个数据版本有一份 manifest，记录市场、日期、文件位置和文件版本，关联来源、规则版本、质量问题及审计信息；文件的校验和、行数和范围等清单信息同样需要可追溯。manifest 标识数据版本与文件集合，问题记录保存可编辑的当前状态和历史；状态变化不要求改写 Parquet。数据修复或更新产生可区分的新数据版本，旧回测记录保留当时输入和问题状态。

@@ -26,7 +26,7 @@
 | `min_free_gib` | `DATA_MIN_FREE_GIB` 或 `defaults/storage.json` | 写任务开始前的最小剩余空间。 |
 | `log_level` | `PIPELINE_LOG_LEVEL` 或 `defaults/runtime.json` | 运行日志级别。 |
 | `config_dir` | `load(config_dir=...)`、`PIPELINE_CONFIG_DIR` 或 `src/config/defaults/` | 本次实际使用的默认配置目录。 |
-| `writer_lock_timeout_seconds` | `PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS` 或 `defaults/runtime.json` | 写锁被占用时最多等待的秒数，`0`–`3600` 的整数；`0` 表示立即失败（PR1 行为）。超时后报 `WriteBoundaryError`，数据不变。写任务把它传给 `DataLayout.create(root, lock_timeout_seconds=...)`。 |
+| `writer_lock_timeout_seconds` | `PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS` 或 `defaults/runtime.json` | 写锁 `.writer.lock` 被占用时最多等待的秒数，`0`–`3600` 的整数；`0` 表示立即失败（PR1 行为）。超时后报 `WriteBoundaryError`，数据不变。写任务通过 `open_write_layout(config)` 取得布局，它自动使用这个值；`src/` 中不允许直接调用 `DataLayout.create`，也不允许直接构造 `DataLayout(...)` 或 `ScopedWriter(...)`（有测试扫描源码检查；完全不写类名的写法如 `type(layout)(...)` 扫描不到，见 ADR-003）。等待方式是后台线程阻塞等待、锁一释放就被唤醒，不是严格的先来先得；放弃等待后，后台线程和它打开的锁文件会一直等到锁空出来，拿到锁立即释放；同一进程再次等待同一把锁时会接手它，反复重试不会越积越多；进程在此期间 fork 出的子进程会关闭继承来的这份文件，不会一直占着锁。这一点只在 macOS 上验证过，Linux 未测。它只管 `.writer.lock`：每次访问账本（开始运行、检查或登记文件、累计计数、结束运行）都另外等待 SQLite 自己的锁，最多 `max(writer_lock_timeout_seconds, 5)` 秒，即使设为 `0` 也至少等 5 秒，等不到时报 `LedgerError`。`Run.commit_file` 访问账本两次，每次都可能等这么久：写文件前检查运行是否仍在进行，写文件后登记。卡在检查时文件不会写入；卡在登记时文件已写入但未登记，由 `python -m src audit` 报告为未登记文件。 |
 
 仅 `PipelineConfig` 共享环境设置可由环境变量覆盖；venue、quality、execution 和 task 等参数从 JSON 与 CLI 获取。优先级为：进程环境变量 > 本机 `.env` > version-controlled JSON default。配置目录另有显式参数优先：`load(config_dir=...)` > `PIPELINE_CONFIG_DIR` > 默认目录。空的覆盖值回退到 JSON 默认值；`DATA_ROOT` 没有默认值。`DATA_MIN_FREE_GIB` 的环境覆盖值只接受 ASCII 十进制数字字符串，可带首尾空白；不接受正负号或下划线。JSON 中须是非负整数，不接受布尔值。`PIPELINE_WRITER_LOCK_TIMEOUT_SECONDS` 同样只接受 ASCII 十进制数字，取值 0–3600。`runtime.json` 缺少该字段时使用模型默认值 `0`，来源记为 `default:model`；直接构造 `PipelineConfig` 时也默认为 `0`（来源 `direct`）。
 
@@ -63,16 +63,17 @@ config = PipelineConfig.load()
 root = config.validate_for_read()
 ```
 
-写任务在创建布局或写入数据前调用：
+写任务通过唯一入口创建布局，再写入数据：
 
 ```python
 from src.config import PipelineConfig
-from src.data_io.layout import DataLayout
+from src.data_io.layout import open_write_layout
 
 config = PipelineConfig.load()
-root = config.validate_for_write()
-layout = DataLayout.create(root, lock_timeout_seconds=config.writer_lock_timeout_seconds)
+layout = open_write_layout(config)
 ```
+
+`open_write_layout` 先调用 `config.validate_for_write()`，通过后才用配置里的 `writer_lock_timeout_seconds` 调用 `DataLayout.create`；预检失败时不会创建任何数据目录。
 
 需要登记运行、manifest 和 checkpoint 的写任务在此之后使用 `Run.start(layout, config, RunSpec(...))`，见 `src/data_io/runs.py` 的模块说明。
 

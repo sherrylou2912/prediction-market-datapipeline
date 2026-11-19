@@ -3,8 +3,7 @@
 Typical use by a write task::
 
     config = PipelineConfig.load()
-    root = config.validate_for_write()
-    layout = DataLayout.create(root, lock_timeout_seconds=config.writer_lock_timeout_seconds)
+    layout = open_write_layout(config)  # write preflight, then the layout with the configured lock timeout
     with Run.start(layout, config, RunSpec(task="mock_backfill", task_version="1")) as run:
         run.commit_file(WriterRole.NORMALIZER, "silver/trades/x.parquet", payload, facts, checkpoint)
         run.finish("succeeded")

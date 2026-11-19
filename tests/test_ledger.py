@@ -12,7 +12,7 @@ import pytest
 from src.data_io import ledger as ledger_module
 from src.data_io.layout import DataLayout, WriteBoundaryError, WriterRole
 from src.data_io.ledger import LEDGER_SCHEMA_VERSION, CheckpointAdvance, FileFacts, Ledger, LedgerError
-from src.data_schema.contracts import SCHEMA_VERSION
+from src.data_schema.contracts import SCHEMA_REGISTRY, SCHEMA_VERSION
 
 T0 = datetime(2026, 11, 13, 12, 0, tzinfo=timezone.utc)
 
@@ -108,6 +108,67 @@ def test_invalid_commit_is_rejected_without_change(tmp_path: Path, path: str, fa
     with pytest.raises(LedgerError, match=message):
         ledger.commit("run-1", path, facts, CheckpointAdvance("k", 1, expected_version=0))
     assert _tables(ledger) == (0, 0, 0)
+
+
+@pytest.mark.parametrize(
+    ("path", "dataset"),
+    [
+        # Another dataset's folder.
+        ("silver/markets/a.parquet", "silver.trades"),
+        ("gold/market_1s/kalshi/MKT-1/v1/20261113.parquet", "gold.market_1m"),
+        ("gold/market_1m/x/a.parquet", "gold.training_datasets"),
+        # Directly under the layer root, as a file or a file named like the dataset.
+        ("silver/a.parquet", "silver.trades"),
+        ("silver/trades", "silver.trades"),
+        ("gold/market_1m", "gold.market_1m"),
+        # The earlier gold layout with the product name fourth.
+        ("gold/kalshi/MKT-1/market_1m/v1/20261113.parquet", "gold.market_1m"),
+        # The folder name must match exactly, not just case-insensitively.
+        ("silver/Trades/a.parquet", "silver.trades"),
+    ],
+)
+def test_file_outside_its_dataset_folder_is_rejected_without_change(tmp_path: Path, path: str, dataset: str) -> None:
+    layout, ledger = _start(tmp_path)
+    layer, name = dataset.split(".")
+    layout.writer(WriterRole(layer)).write_new(path, b"abc")
+    with pytest.raises(LedgerError, match=f"{dataset} file must be under {layer}/{name}/"):
+        ledger.commit("run-1", path, _facts(dataset=dataset), CheckpointAdvance("k", 1, expected_version=0))
+    assert _tables(ledger) == (0, 0, 0)
+    assert ledger.checkpoint_history("run-1") == []
+
+
+def test_files_in_their_dataset_folder_register(tmp_path: Path) -> None:
+    layout, ledger = _start(tmp_path)
+    datasets = [name for name in SCHEMA_REGISTRY["datasets"] if not name.startswith("bronze.")]
+    assert len(datasets) == 13
+    for dataset in datasets:
+        layer, name = dataset.split(".")
+        path = f"{layer}/{name}/part/a.parquet"
+        layout.writer(WriterRole(layer)).write_new(path, b"abc")
+        assert ledger.commit("run-1", path, _facts(dataset=dataset))["dataset"] == dataset
+    examples = [
+        ("gold/market_1m/kalshi/MKT-1/v1/20261113.parquet", "gold.market_1m"),
+        ("gold/training_datasets/taker-v1/part-0.parquet", "gold.training_datasets"),
+        ("silver/trades/kalshi/20261113.parquet", "silver.trades"),
+    ]
+    for path, dataset in examples:
+        layout.writer(WriterRole(dataset.split(".")[0])).write_new(path, b"abc")
+        ledger.commit("run-1", path, _facts(dataset=dataset))
+    assert len(ledger.manifests()) == 16
+
+
+def test_bronze_files_are_checked_by_layer_only(tmp_path: Path) -> None:
+    layout, ledger = _start(tmp_path)
+    collector = layout.writer(WriterRole.COLLECTOR)
+    # Bronze has one dataset; its second level is the source, not "raw".
+    for path in ("bronze/kalshi/trades/r1/page-1.json", "bronze/r2/x"):
+        collector.write_new(path, b"abc", receipt_id=Path(path).parts[-2])
+        ledger.commit("run-1", path, _facts(dataset="bronze.raw"))
+    assert len(ledger.manifests()) == 2
+    _publish(layout, "silver/raw/a.parquet")
+    with pytest.raises(LedgerError, match="under bronze/"):
+        ledger.commit("run-1", "silver/raw/a.parquet", _facts(dataset="bronze.raw"))
+    assert len(ledger.manifests()) == 2
 
 
 def test_invalid_checkpoint_cursor_and_symlinked_file_rejected(tmp_path: Path) -> None:
@@ -235,6 +296,38 @@ def test_watermark_cannot_move_backwards_or_disappear(tmp_path: Path) -> None:
         with pytest.raises(LedgerError, match="backwards"):
             ledger.commit("run-1", path, _facts(), CheckpointAdvance("k", 2, expected_version=1, watermark=watermark))
     assert _tables(ledger) == (1, 1, 3)
+
+
+def test_stale_racing_run_reports_version_conflict_before_watermark(tmp_path: Path) -> None:
+    # Both runs read the checkpoint at version 1; run-1 advances it first, then
+    # the late run-2 commits with the stale expected_version. Its watermark
+    # (missing, or older than run-1's) must not hide the real cause.
+    layout, ledger = _start(tmp_path)
+    ledger.create_run(
+        run_id="run-2",
+        task="test",
+        task_version="1",
+        started_at=T0,
+        code_version={"commit": None},
+        config={"sha256": "x"},
+        parameters={},
+    )
+    ledger.commit("run-1", _publish(layout), _facts(), CheckpointAdvance("k", 1, expected_version=0, watermark=T0))
+    late = T0 + timedelta(minutes=1)
+    ledger.commit(
+        "run-1",
+        _publish(layout, "silver/trades/b.parquet"),
+        _facts(),
+        CheckpointAdvance("k", 2, expected_version=1, watermark=late),
+    )
+    before = (_tables(ledger), ledger.get_run("run-2")["rows_written"], ledger.get_checkpoint("k"))
+    for index, watermark in enumerate((None, T0 + timedelta(seconds=30))):
+        path = _publish(layout, f"silver/trades/c{index}.parquet")
+        with pytest.raises(LedgerError, match="is at version 2, expected 1; nothing was registered"):
+            ledger.commit("run-2", path, _facts(), CheckpointAdvance("k", 9, expected_version=1, watermark=watermark))
+    assert (_tables(ledger), ledger.get_run("run-2")["rows_written"], ledger.get_checkpoint("k")) == before
+    assert ledger.manifests("run-2") == []
+    assert [row["version"] for row in ledger.checkpoint_history("run-2")] == []
 
 
 def test_concurrent_reader_does_not_fail_a_commit(tmp_path: Path) -> None:

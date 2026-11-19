@@ -1,7 +1,13 @@
 """Scoped, append-only writes and recovery under the configured data root.
 
 The advisory lock coordinates cooperating writers on the same host. It is held
-while recovering abandoned partials or writing and publishing a file.
+while recovering abandoned partials or writing and publishing a file. A writer
+with a non-zero timeout waits with a blocking ``flock`` so it is woken when the
+lock is released; this was verified only on macOS. A wait that gives up leaves
+its background thread and lock-file handle blocked until the lock is free; a
+later wait on the same lock reuses them, and a forked child closes its copies.
+
+Write tasks obtain their layout through ``open_write_layout(config)``.
 """
 
 from __future__ import annotations
@@ -15,6 +21,7 @@ import os
 import re
 import stat
 import tempfile
+import threading
 import time
 import uuid
 from collections.abc import Iterator
@@ -24,6 +31,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 
+from src.config import PipelineConfig
 from src.config.validation import MAX_LOCK_TIMEOUT_SECONDS
 
 logger = logging.getLogger(__name__)
@@ -86,33 +94,247 @@ def _mkdir(parent: Path, name: str) -> Path:
     return path
 
 
+def _open_lock_file(path: Path) -> int:
+    fd = os.open(path, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode) or path.is_symlink():
+            raise WriteBoundaryError(f"Writer lock must be a regular file: {path}")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+# Waiter state shared by every thread in this process; all of it is guarded by
+# ``_WAITERS_MUTEX``. ``_IDLE_WAITERS`` holds, per lock file, waiters whose
+# caller gave up while their thread is still blocked in ``flock``; a later wait
+# for the same file reuses one instead of starting another thread and handle.
+# ``_WAITER_HANDLES`` holds the handles still owned by waiter threads; a forked
+# child closes its copies so it never keeps the lock held.
+#
+# The mutex is reentrant only as damage control: on CPython 3.9 a
+# KeyboardInterrupt can land between the end of a ``with`` body and the release,
+# leaving the mutex held. The interrupted thread's own cleanup can then still
+# enter it instead of deadlocking against itself; other threads (and waiter
+# threads, which then keep any lock they obtain) block on it until the process
+# exits. Nothing here acquires it re-entrantly by design. Its critical sections
+# only do short operations, including a waiter thread opening the lock file (a
+# brief system call); none of them waits for the lock itself.
+_WAITERS_MUTEX = threading.RLock()
+_IDLE_WAITERS: dict[tuple[int, int], list[_LockWaiter]] = {}
+_WAITER_HANDLES: set[int] = set()
+
+
+class _LockWaiter:
+    """Wait for the writer lock with a blocking ``flock`` in a background thread.
+
+    The kernel wakes a blocked waiter as soon as the holder releases the lock,
+    so a writer that releases and immediately re-acquires it rarely keeps the
+    waiter out, unlike fixed-interval polling. This is not a strict queue, and
+    it was verified only on macOS. The calling thread enforces the timeout.
+
+    ``claim`` is the handle list of the one wait that currently owns this
+    waiter, or ``None`` while nobody does. When ``flock`` returns, the thread
+    appends its handle to that list, so the lock can only go to the current
+    owner and is in the owner's list the moment it is obtained. If nobody owns
+    the waiter then, the thread closes the handle at once, releasing the lock.
+
+    The thread opens its handle itself and is the only code that closes it (a
+    forked child closes only its own copy). A caller therefore never has to
+    guess whether the thread started: ``Thread.start`` can raise after the
+    thread is already running, e.g. when a signal handler raises in it.
+    Created and started only through ``_wait_for_lock``.
+    """
+
+    def __init__(self, path: Path, key: tuple[int, int]) -> None:
+        self.path = path
+        self.key = key
+        self.claim: list[int] | None = None
+        self.done = False
+        self.error: Exception | None = None
+        self.finished = threading.Event()
+        self.thread = threading.Thread(target=self._wait, name="writer-lock-waiter", daemon=True)
+
+    def _wait(self) -> None:
+        fd: int | None = None
+        error: Exception | None = None
+        try:
+            with _WAITERS_MUTEX:  # registered at once, so a fork never sees an unregistered handle
+                fd = _open_lock_file(self.path)
+                _WAITER_HANDLES.add(fd)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except Exception as exc:  # OSError, or WriteBoundaryError for a non-regular lock file
+            error = exc
+        with _WAITERS_MUTEX:
+            _forget_idle(self)
+            self.done = True
+            claim = self.claim
+            if fd is not None:
+                _WAITER_HANDLES.discard(fd)
+                if claim is not None and error is None:
+                    claim.append(fd)  # the owning wait now holds the lock
+                else:
+                    os.close(fd)  # releases the lock if nobody is waiting for it any more
+            if claim is not None:
+                self.error = error  # reported by the owning wait
+        # Outside the mutex: Event.set takes the event's own lock.
+        self.finished.set()
+        if error is not None and claim is None:
+            logger.warning(
+                "Abandoned writer lock wait ended with an error: %s",
+                error,
+                extra={"event": "writer.lock_wait_error"},
+            )
+
+
+def _forget_idle(waiter: _LockWaiter) -> None:
+    idle = _IDLE_WAITERS.get(waiter.key, [])
+    if waiter in idle:
+        idle.remove(waiter)
+    if not idle:
+        _IDLE_WAITERS.pop(waiter.key, None)
+
+
+def _take_idle_waiter(key: tuple[int, int]) -> _LockWaiter | None:
+    """Pop a reusable waiter for ``key``; call with ``_WAITERS_MUTEX`` held."""
+    idle = _IDLE_WAITERS.get(key, [])
+    found = None
+    while idle and found is None:
+        candidate = idle.pop()
+        # Defensive: drop a waiter whose thread is no longer running (one whose
+        # start failed is never made idle, so this only guards unexpected deaths).
+        if candidate.thread.is_alive():
+            found = candidate
+    if not idle:
+        _IDLE_WAITERS.pop(key, None)
+    return found
+
+
+def _wait_for_lock(path: Path, key: tuple[int, int], timeout: float, held: list[int]) -> bool:
+    """Wait up to ``timeout`` seconds for the lock; return whether it was obtained.
+
+    On success the waiter thread has appended the handle that holds the lock to
+    ``held``. The caller owns ``held`` and closes every handle in it, also when
+    this function raises, so the held handle is never only in a local variable.
+
+    Reuses a waiter that an earlier, abandoned wait on the same lock file left
+    blocked, so a process never has more waiter threads (and handles) for a
+    lock file than the most waits it had in progress on it at the same time;
+    a single thread that retries keeps at most one. Before returning or
+    raising, the wait either finds the waiter finished (its handle is then in
+    ``held``, or its error is raised here) or hands it back as unowned under
+    the mutex; after that it never reads the waiter again, because another
+    wait may already own it.
+
+    Python delivers ``KeyboardInterrupt`` (or an exception from a signal
+    handler) between bytecodes, so a few-instruction gap remains in which an
+    interruption can leave one waiter that is no longer reused or, if the
+    waiter is still owned, a waiter that keeps the lock once it gets it. An
+    exception from ``Thread.start`` only leaves a waiter that is not reused.
+    See ``_lock`` for the documented limitation.
+    """
+    deadline = time.monotonic() + max(timeout, 0)
+    waiter: _LockWaiter | None = None
+    created = started = False
+    obtained = False
+    error: Exception | None = None
+    try:
+        # ``with`` on the C lock: an interruption that arrives while blocked here is
+        # delivered only after the block is set up, so it cannot leave the mutex held.
+        # (``acquire(timeout=...)`` followed by ``try`` measured far worse: the
+        # interruption lands between the two and leaves the mutex held.)
+        with _WAITERS_MUTEX:
+            waiter = _take_idle_waiter(key)
+            if waiter is None:
+                created = True
+                waiter = _LockWaiter(path, key)
+            waiter.claim = held
+        if created:
+            waiter.thread.start()
+            started = True
+        waiter.finished.wait(max(deadline - time.monotonic(), 0))
+    finally:
+        if waiter is not None:
+            with _WAITERS_MUTEX:
+                # Decide the outcome here; once handed back, the waiter belongs to whoever reuses it.
+                if waiter.done:
+                    # Finished while this wait owned it: its handle is in ``held``, or this is its error.
+                    error = waiter.error
+                    obtained = error is None
+                else:
+                    waiter.claim = None
+                    if started or not created:
+                        _IDLE_WAITERS.setdefault(key, []).append(waiter)
+                    # Otherwise ``start`` was not reached or raised, possibly after the thread
+                    # began running. Such a waiter is not reused; if it is running, it closes
+                    # its own handle once ``flock`` returns, as for any unowned waiter.
+    if error is not None:
+        raise error
+    return obtained
+
+
+def _close_waiter_handles_in_child() -> None:
+    """After ``fork``: the child has no waiter threads, so close their inherited handles."""
+    global _WAITERS_MUTEX
+    # The child is single-threaded; a fresh mutex is free even if the parent's was left held.
+    _WAITERS_MUTEX = threading.RLock()
+    for fd in _WAITER_HANDLES:
+        os.close(fd)
+    _WAITER_HANDLES.clear()
+    _IDLE_WAITERS.clear()
+
+
+if hasattr(os, "register_at_fork"):
+    # Holding the mutex across fork keeps the waiter state consistent in the child.
+    os.register_at_fork(
+        before=lambda: _WAITERS_MUTEX.acquire(),
+        after_in_parent=lambda: _WAITERS_MUTEX.release(),
+        after_in_child=_close_waiter_handles_in_child,
+    )
+
+
 @contextmanager
 def _lock(root: Path, timeout_seconds: int = 0) -> Iterator[None]:
+    """Hold ``root/.writer.lock`` for the ``with`` body, waiting up to ``timeout_seconds``.
+
+    Release first unlocks the handle and then closes it, in nested ``finally``
+    blocks, so one interruption during release still releases the lock. Only
+    the process that took the lock unlocks it: a child forked inside the body
+    that unwinds the same ``with`` only closes its copy. Python can still
+    deliver an interruption (Ctrl-C, or an exception raised by a signal handler)
+    at other bytecode boundaries; if the program catches it and keeps running,
+    the lock can stay held until the process exits: a later wait in this process
+    then fails at its timeout and, especially on CPython 3.9, a wait or ``fork``
+    in another thread of this process can hang. After
+    Ctrl-C, let the process exit; the operating system then releases the lock.
+    """
     # Checked here so direct DataLayout/ScopedWriter construction is covered too.
     if type(timeout_seconds) is not int or not 0 <= timeout_seconds <= MAX_LOCK_TIMEOUT_SECONDS:
         raise WriteBoundaryError(f"lock_timeout_seconds must be an integer from 0 to {MAX_LOCK_TIMEOUT_SECONDS}")
     path = root / ".writer.lock"
-    fd = None
+    held = f"Writer lock is held by another process: {path} (waited {timeout_seconds}s)"
+    deadline = time.monotonic() + timeout_seconds
+    owner = os.getpid()
+    handles = [_open_lock_file(path)]  # at most one handle at any time
     try:
-        fd = os.open(path, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
-        if not stat.S_ISREG(os.fstat(fd).st_mode) or path.is_symlink():
-            raise WriteBoundaryError(f"Writer lock must be a regular file: {path}")
-        deadline = time.monotonic() + timeout_seconds
-        while True:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError as exc:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise WriteBoundaryError(
-                        f"Writer lock is held by another process: {path} (waited {timeout_seconds}s)"
-                    ) from exc
-                time.sleep(min(0.05, remaining))
+        try:
+            fcntl.flock(handles[0], fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            if timeout_seconds == 0:
+                raise WriteBoundaryError(held) from exc
+            info = os.fstat(handles[0])
+            os.close(handles.pop())  # the waiter thread opens its own handle
+            if not _wait_for_lock(path, (info.st_dev, info.st_ino), deadline - time.monotonic(), handles):
+                raise WriteBoundaryError(held) from exc
         yield
     finally:
-        if fd is not None:
-            os.close(fd)
+        try:
+            if os.getpid() == owner:
+                for handle in handles:
+                    fcntl.flock(handle, fcntl.LOCK_UN)
+        finally:
+            for handle in handles:
+                os.close(handle)
 
 
 def _digest(path: Path) -> tuple[str, int]:
@@ -376,6 +598,20 @@ class DataLayout:
         if not isinstance(role, WriterRole):
             raise TypeError("Writer role must be a WriterRole value.")
         return ScopedWriter(root=self.root, role=role, lock_timeout_seconds=self.lock_timeout_seconds)
+
+
+def open_write_layout(config: PipelineConfig) -> DataLayout:
+    """The entry point for write tasks: write preflight first, then the layout with the configured lock timeout.
+
+    A test scans ``src/`` and rejects any other ``DataLayout.create`` or direct
+    ``DataLayout(...)``/``ScopedWriter(...)`` construction, so every write task
+    runs ``validate_for_write`` before any directory is created, recovers
+    abandoned partials, and waits ``writer_lock_timeout_seconds``.
+    """
+    if not isinstance(config, PipelineConfig):
+        raise TypeError("config must be a PipelineConfig value")
+    root = config.validate_for_write()
+    return DataLayout.create(root, lock_timeout_seconds=config.writer_lock_timeout_seconds)
 
 
 @dataclass(frozen=True)
