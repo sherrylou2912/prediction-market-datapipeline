@@ -417,3 +417,56 @@ B2 的其他新增代码复核后无问题：`COMMIT` 失败后的 `ROLLBACK` �
 - Round result: `escalated`。B4 已达 3 轮上限，仍有 1 个 should-fix（B4-R3-1）未关闭。所有 B4-R1、B4-R2 的发现都已解决；lint、format 和全量测试（424 passed）均由 Reviewer 亲自运行并通过。B4-R3-1 只在“账本曾被外部工具切到 WAL”这一越出契约的情况下出现，不影响正常写入路径，也不会写入数据；但文档给出的恢复步骤会失效，audit 会一直无法使用。Reviewer 的立场：修改很小（拒绝条件改为“文件头为 WAL 或存在 `-wal`”，并加一条测试），建议再修一次后由 Reviewer 确认；也可由负责人接受为已知限制，只更正文档。请 Reporter 交负责人决定。
 
 Analyst 检查（B2-R3-1、B4-R3-1 修复后）：`uv run ruff check .` 通过；`uv run ruff format --check .` 通过；`uv run pytest tests/ -q` → 426 passed。
+
+## Block B4 · Round 4 · 2026-11-18
+
+**结论先说：** B4-R3-1 已经真正修好，B4 收敛（`converged`）。审计命令现在只在“账本真的处于 WAL 状态”时拒绝；账本恢复正常后留下的那个无害的 `-shm` 文件不再挡住审计。没有新的 must-fix 或 should-fix，只有一条措辞上的 suggestion。
+
+背景（一句话）：SQLite 账本有两种记“未完成修改”的方式。一种是默认的回滚日志（DELETE 模式），另一种是 WAL 模式。WAL 模式会在账本旁边生成 `-wal`（存放还没并回主文件的修改）和 `-shm`（只是一个索引，不存数据）两个文件。本项目只允许 DELETE 模式。
+
+- Revision: `codex/pr2-run-ledger` @ `62a4012`（HEAD）。本轮审查的是 `e69f167` 中属于 B4 的改动：`src/data_io/ledger.py`（`open_read_only` 的拒绝条件，以及 `path.absolute().as_uri()`）、`tests/test_audit.py`（新增 `test_leftover_shm_after_returning_to_delete_mode_is_allowed`）、`tests/test_ledger.py`（新增相对路径测试，属于 B2-R3-1，只作背景）、`README.md`、`src/config/README.md`、`docs/adr/ADR-003-pr2-sqlite-ledger.md`。`git diff e69f167 HEAD --stat -- src tests README.md CHANGELOG.md src/config docs/adr` 没有输出，说明之后的 `6e6dfe0`、`62a4012` 没有再改这些代码和文档。工作区中未提交的改动（`AGENTS.md`，以及可能由 B1 Analyst 同时修改的 README 等）不在本轮范围，文档一律以 HEAD 版本为准。
+- Addresses: B4-R3-1（升级后修复的复核，依据 `PLAN.md` §4b 负责人 2026-11-18 的决定）；同时复查 B4 之前所有发现的状态，并按 `PLAN.md` B4 验收示例整体复核。
+- 审查方式：在本会话 scratchpad 中用 `git worktree add --detach <scratchpad>/wt-b4-r4 HEAD` 检出 HEAD 运行全部检查，探测数据放在 scratchpad 的专用目录中；结束后用 `git worktree remove --force` 和按确切路径删除清理，`git worktree list` 确认只剩主工作区。
+- Checks run by Reviewer（均在上述 worktree 内，CPython 3.9.6）：
+  - `uv run ruff check .` → All checks passed!
+  - `uv run ruff format --check .` → 30 files already formatted
+  - `uv run pytest tests/ -v` → 426 passed in 6.18s
+  - `uv run pytest tests/test_audit.py tests/test_ledger.py -q` → 37 passed
+  - 临时探测脚本（scratchpad，未入库，`PYTHONPATH=. uv run python <scratchpad>/probe-b4r4/probe.py`、`probe2.py`）。每项都通过 CLI `main(["audit"])` 运行，并在前后对整个 `DATA_ROOT` 做快照（每个文件的大小、修改时间、SHA-256，外加根目录和 `manifests/` 的修改时间）：
+    1. **B4-R3-1 原场景**：外部把账本切到 WAL 并关闭，再执行写路径 `Ledger.open(layout)`。之后 `manifests/` 中是 `ledger.sqlite3`、`ledger.sqlite3-shm`、`runs`，文件头第 18–19 字节为 `0101`（DELETE）。这个 `-shm` 是 SQLite 在 macOS 上自然留下的，不是人工造的。audit → 返回 0，快照无差异。之后再跑一个写任务（`Run.start` + `commit_file` + `finish`），audit 仍返回 0，快照无差异。
+    2. **WAL 写进程崩溃，留下有内容的 `-wal`**（4152 字节，里面有一条已提交、但还没并回主文件的修改）→ audit 返回 2，提示 “is in WAL mode or has a WAL file … A write task reopens it in DELETE mode.”，快照无差异。然后执行写路径 `Ledger.open(layout)`：`-wal` 消失，文件头变回 `0101`，那条修改被保留（读到 `task='walprobe'`）。之后 audit 返回 0。文档写的恢复方法（“下一个写任务会以 DELETE 模式重新打开”）这次实际成立。
+    3. 文件头为 DELETE，但存在 0 字节的 `-wal` → 返回 2，快照无差异（保守拒绝，合理）。
+    4. 只有内容为随机字节的 `-shm` → 返回 0，快照无差异（DELETE 模式下 SQLite 根本不读 `-shm`）。
+    5. `-shm` 是指向 `DATA_ROOT` 外文件的软链接 → 返回 1，报告 `unexpected_symlink`，快照无差异，外部文件内容不变。
+    6. 验收示例：干净目录 → 0；篡改已登记文件、删除已登记文件、未登记文件、遗留 `.partial-x`、未结束运行、已结束但 `record.json` 被删 → 返回 1，依次报告 `manifest_file_changed`、`manifest_file_missing`、`unregistered_file`、`partial_file`、`run_unfinished`、`run_record_missing`，快照无差异。
+    7. 没有 `manifests/`、只有 `silver/` 的目录 → 返回 0，`ledger: absent`，没有新建任何目录或文件。
+  - 文档一致性：`git grep -n -e "-shm" -e "WAL" HEAD -- . ':!docs/pr2'`。README.md:85、`src/config/README.md:55`、ADR-003 第 18 行都已改成“文件头为 WAL 或存在 `-wal` 时拒绝，遗留 `-shm` 允许”，与代码一致。`docs/README.md:53` 索引了 ADR-003；`CHANGELOG.md:9` 有 audit 条目。
+
+### Previous findings
+| ID | Status | Evidence |
+| --- | --- | --- |
+| B4-R3-1 | resolved | `src/data_io/ledger.py:325-333` 的拒绝条件改为 `header[18:20] == b"\x02\x02" or wal.exists() or wal.is_symlink()`，不再看 `-shm`。探测 1 用 SQLite 自然留下的 `-shm` 复现了 R3 的场景，audit 返回 0 且不改任何文件；探测 2 证明真正有风险的 `-wal` 仍被拒绝，并且文档说的恢复方法确实有效。新测试 `test_leftover_shm_after_returning_to_delete_mode_is_allowed` 通过（在不留 `-shm` 的平台上，测试会自己造一个，因此各平台都能覆盖这个分支）。三份文档已同步。 |
+| B4-R2-1 | resolved（维持） | 探测 2、3：文件头为 WAL 或存在 `-wal` 时仍返回 2，快照无差异；`test_wal_mode_ledger_is_refused_without_writing` 通过。 |
+| B4-R2-2 | resolved（维持） | `open_read_only` 仍用 `?mode=rw`，并改为 `path.absolute().as_uri()`，不会新建缺失的账本；探测 7 和 `test_read_only_open_never_creates_a_missing_ledger` 通过。 |
+| B4-R2-3 | resolved（维持） | `audit.py` 的 `_walk` 仍把无法列出的目录记为 `scan_error` 并继续；`_check_file` 仍拒绝软链接的 `manifests/`。相关测试通过。 |
+| B4-R1-1 | resolved（维持） | 回滚日志检查在 `ledger.py:312-319` 未变；`test_rollback_journal_is_refused_without_writing` 通过。 |
+| B4-R1-2 | resolved（维持） | 层根软链接和父目录软链接的处理未变；`test_symlinks_are_reported_not_followed` 通过；探测 5 中 `manifests/` 下的软链接也被报告。 |
+| B4-R1-3 | resolved（维持） | `Ledger.snapshot()` 单个读事务未变；文档仍写明须在没有写任务时运行。 |
+| B4-R1-4 | resolved（维持） | `test_cli_writes_nothing_and_reports_absent_ledger` 通过；探测 6、7 走 CLI 路径，快照无差异。 |
+| B4-R1-5 | resolved（维持） | 不可读文件报 `manifest_file_unreadable`、不可读目录报 `scan_error`，审计都继续；相关测试通过。 |
+| B4-R1-6 | resolved（维持） | `test_recovery_partials_and_unreadable_files_are_reported` 通过。 |
+| B4-R1-7 | resolved（维持） | `e69f167` 之后 ADR-002 没有改动。 |
+
+### New findings
+| ID | Severity | Location | Finding | Suggested direction |
+| --- | --- | --- | --- | --- |
+| B4-R4-1 | suggestion | `src/data_io/audit.py:3-5`（模块说明） | 模块说明仍写 “refuses to open a ledger that has a rollback journal or WAL files”。现在单独的 `-shm` 是允许的，“WAL files”（复数）容易让读代码的人以为 `-shm` 也会被拒绝。例子：有人看到 `manifests/ledger.sqlite3-shm`，读了这句说明，会以为 audit 一定失败，实际上它返回 0。只是措辞问题，行为和对外文档都正确。 | 改成 “a rollback journal, a WAL-mode header, or a `-wal` file”。以后有人改这个文件时顺手修改即可。 |
+
+### Owner questions
+none
+
+### Analyst response
+| ID | Action (fixed / disputed / deferred-to-owner) | Detail and checks |
+| --- | --- | --- |
+
+- Round result: `converged`。B4 之前所有 must-fix 和 should-fix 都已 resolved，其中 B4-R3-1 由本轮确认；没有新的 must-fix 或 should-fix；没有待回答的阻塞问题；lint、format 和全量测试（426 passed）均由 Reviewer 在 HEAD 的独立 worktree 中亲自运行并通过。B4 的验收示例（干净返回 0；篡改、删除、未登记、遗留 partial、未结束运行、缺失 record 都报告并返回 1；不创建目录、不写文件；没有账本时报告 `absent`）已由测试和本轮 CLI 探测再次确认。B4-R4-1 是 suggestion，交给 Reporter。说明：以上只证明本机（macOS、CPython 3.9.6、系统自带 SQLite）上的行为；Linux 上 SQLite 是否会留下 `-shm` 没有实测，但新测试在不留 `-shm` 时会自己造一个，所以代码分支在两种情况下都有覆盖。
